@@ -27,6 +27,17 @@ class BacktestRequest(BaseModel):
     recurringAmount: float = Field(ge=0)
     recurringFrequency: Literal["weekly", "monthly"]
 
+@app.get("/")
+def home():
+    return {
+        "message": "Finance Calculator API is running",
+        "routes": [
+            "/stocks/search?q=apple",
+            "/stocks/price?symbol=AAPL",
+            "/stocks/backtest"
+        ]
+    }
+
 def add_one_month(input_date: date):
     if input_date.month == 12:
         new_year = input_date.year + 1
