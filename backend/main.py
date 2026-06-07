@@ -174,7 +174,7 @@ def backtest_stock(request: BacktestRequest):
             "gainLoss": round(gain_loss, 2),
             "gainLossPercent": round(gain_loss_percent, 2),
             "totalTransactions": len(transactions),
-            "transactions": transactions[-5:]
+            "transactions": transactions
         }
 
     except ValueError:
