@@ -391,16 +391,23 @@ function App() {
 
             <h3>Latest Transactions</h3>
 
+            <div className="transactions-list">
             {backtestResult.transactions.map((transaction, index) => (
               <div key={index} className="transaction-row">
                 <p>
-                  {transaction.date} | {transaction.type} |{" "}
+                  <strong>{index + 1}.</strong> {transaction.date} | {transaction.type}
+                </p>
+
+                <p>
+                  Invested:{" "}
                   {formatMoney(transaction.amount, backtestResult.currency)} at{" "}
                   {formatMoney(transaction.price, backtestResult.currency)}
                 </p>
+
                 <small>Shares bought: {transaction.shares}</small>
               </div>
             ))}
+          </div>
           </div>
         )}
       </div>

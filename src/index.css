@@ -129,6 +129,9 @@ body,
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding-right: 8px;
 }
 
 .card input,
@@ -178,6 +181,8 @@ body,
   border: 1px solid #ccc;
   padding: 12px;
   border-radius: 8px;
+  max-height: 500px;
+  overflow-y: auto;
 }
 
 .stock-name {
@@ -228,8 +233,19 @@ body,
   margin: 6px 0;
 }
 
-.transaction-row {
+.transactions-list {
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 8px;
   border-top: 1px solid #ddd;
-  padding-top: 8px;
   margin-top: 8px;
+}
+
+.transaction-row {
+  border-bottom: 1px solid #ddd;
+  padding: 10px 0;
+}
+
+.transaction-row p {
+  margin: 4px 0;
 }
