@@ -1,6 +1,9 @@
 import { useState } from "react";
 import "./App.css";
 
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
 type Stock = {
   symbol: string;
   name: string;
@@ -80,9 +83,7 @@ function App() {
       setErrorMessage("");
 
       const response = await fetch(
-        `http://127.0.0.1:8000/stocks/search?q=${encodeURIComponent(
-          trimmedValue
-        )}`
+        `${API_BASE_URL}/stocks/search?q=${encodeURIComponent(trimmedValue)}`
       );
 
       const data = await response.json();
@@ -117,9 +118,7 @@ function App() {
       setErrorMessage("");
 
       const response = await fetch(
-        `http://127.0.0.1:8000/stocks/price?symbol=${encodeURIComponent(
-          symbol
-        )}`
+        `${API_BASE_URL}/stocks/price?symbol=${encodeURIComponent(symbol)}`
       );
 
       const data = await response.json();
@@ -161,7 +160,7 @@ function App() {
       setErrorMessage("");
       setBacktestResult(null);
 
-      const response = await fetch("http://127.0.0.1:8000/stocks/backtest", {
+      const response = await fetch(`${API_BASE_URL}/stocks/backtest`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
