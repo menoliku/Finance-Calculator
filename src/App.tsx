@@ -282,6 +282,38 @@ function App() {
         )}
       </div>
 
+      {isPriceLoading && <p className="helper-text">Loading price...</p>}
+
+      {stockPrice && (
+        <div className="price-card">
+          <div>
+            <p className="stock-name">{stockPrice.name}</p>
+            <p className="stock-price">
+              {stockPrice.price !== null
+                ? formatMoney(stockPrice.price, stockPrice.currency)
+                : "N/A"}
+            </p>
+          </div>
+
+          <div className="price-details">
+            <p>
+              <strong>Symbol:</strong> {stockPrice.symbol}
+            </p>
+
+            <p>
+              <strong>Previous Close:</strong>{" "}
+              {stockPrice.previousClose !== null
+                ? formatMoney(stockPrice.previousClose, stockPrice.currency)
+                : "N/A"}
+            </p>
+
+            <p>
+              <strong>Market Cap:</strong> {formatMarketCap(stockPrice.marketCap)}
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="input-row">
         <div className="field-group">
           <label className="field-label">
