@@ -6,6 +6,7 @@ from typing import Literal
 from datetime import date, datetime, timedelta
 import calendar
 import pandas as pd
+from collections import defaultdict
 
 app = FastAPI()
 
@@ -111,46 +112,89 @@ def backtest_stock(request: BacktestRequest):
         total_invested = 0
         transactions = []
 
+        # Remove duplicate price rows just in case Yahoo returns repeated dates
+        prices = prices[~prices.index.duplicated(keep="last")]
+
+        first_available_trading_day = prices.index[0].date()
+        latest_available_trading_day = prices.index[-1].date()
+
+        cash_by_buy_date = defaultdict(float)
+        source_by_buy_date = defaultdict(list)
+
+        def get_price_on_or_after(target_date: date):
+            target_timestamp = pd.Timestamp(target_date)
+            available_prices = prices[prices.index >= target_timestamp]
+
+            if available_prices.empty:
+                return None, None
+
+            buy_date = available_prices.index[0]
+            buy_price = float(available_prices.iloc[0])
+
+            return buy_date.date(), buy_price
+
+
+        def schedule_investment(target_date: date, amount: float, source: str):
+            if amount <= 0:
+                return
+
+            buy_date, buy_price = get_price_on_or_after(target_date)
+
+            if buy_date is None or buy_price is None:
+                return
+
+            cash_by_buy_date[buy_date] += amount
+            source_by_buy_date[buy_date].append(source)
+
+
         # Initial principal investment
-        first_buy_date, first_buy_price = get_price_on_or_after(start_date)
+        schedule_investment(start_date, request.principal, "initial")
 
-        if first_buy_price is None:
-            return {"error": "Could not find a valid first buy price"}
-
-        if request.principal > 0:
-            shares_bought = request.principal / first_buy_price
-            total_shares += shares_bought
-            total_invested += request.principal
-
-            transactions.append({
-                "date": first_buy_date,
-                "amount": round(request.principal, 2),
-                "price": round(first_buy_price, 4),
-                "shares": round(shares_bought, 6),
-                "type": "initial"
-            })
-
-        # Recurring investments start from the next period
+        # Recurring investments
         recurring_date = add_period(start_date, request.recurringFrequency)
 
-        while recurring_date <= today:
-            buy_date, buy_price = get_price_on_or_after(recurring_date)
-
-            if buy_price is not None and request.recurringAmount > 0:
-                shares_bought = request.recurringAmount / buy_price
-                total_shares += shares_bought
-                total_invested += request.recurringAmount
-
-                transactions.append({
-                    "date": buy_date,
-                    "amount": round(request.recurringAmount, 2),
-                    "price": round(buy_price, 4),
-                    "shares": round(shares_bought, 6),
-                    "type": request.recurringFrequency
-                })
+        while recurring_date <= latest_available_trading_day:
+            schedule_investment(
+                recurring_date,
+                request.recurringAmount,
+                request.recurringFrequency
+            )
 
             recurring_date = add_period(recurring_date, request.recurringFrequency)
 
+
+        # Buy once per actual trading day
+        for buy_date in sorted(cash_by_buy_date.keys()):
+            amount = cash_by_buy_date[buy_date]
+
+            buy_timestamp = pd.Timestamp(buy_date)
+            buy_price = float(prices.loc[buy_timestamp])
+
+            shares_bought = amount / buy_price
+
+            total_shares += shares_bought
+            total_invested += amount
+
+            sources = sorted(set(source_by_buy_date[buy_date]))
+
+            transactions.append({
+                "date": buy_date.isoformat(),
+                "amount": round(amount, 2),
+                "price": round(buy_price, 4),
+                "shares": round(shares_bought, 6),
+                "type": " + ".join(sources)
+            })
+
+        latest_price = float(prices.iloc[-1])
+        latest_date = prices.index[-1].date().isoformat()
+
+        current_value = total_shares * latest_price
+        gain_loss = current_value - total_invested
+
+        if total_invested > 0:
+            gain_loss_percent = (gain_loss / total_invested) * 100
+        else:
+            gain_loss_percent = 0
         latest_price = float(prices.iloc[-1])
         latest_date = prices.index[-1].date().isoformat()
 
@@ -174,7 +218,12 @@ def backtest_stock(request: BacktestRequest):
             "gainLoss": round(gain_loss, 2),
             "gainLossPercent": round(gain_loss_percent, 2),
             "totalTransactions": len(transactions),
-            "transactions": transactions
+            "transactions": transactions,
+            "notes": [
+                "Multiple investments on the same trading day are combined into one transaction.",
+                "If the selected start date is before the stock's first available trading day, investments are moved to the first available trading day.",
+                "Historical prices use adjusted close data to reduce stock split distortion."
+            ]
         }
 
     except ValueError:
