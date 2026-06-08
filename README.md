@@ -6,8 +6,8 @@ The application lets users select a stock, choose an investment start date, ente
 
 ## Live Demo
 
-Frontend: `https://your-github-username.github.io/Finance-Calculator/`
-Backend API: `https://your-render-backend-url.onrender.com`
+Frontend: `https://menoliku.github.io/Finance-Calculator/`
+Backend API: `https://finance-calculator-kup5.onrender.com`
 
 ## Features
 
