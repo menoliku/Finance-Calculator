@@ -188,6 +188,9 @@ function App() {
 
       const data = await response.json();
 
+      console.log("Backtest data:", data);
+      console.log("Transactions:", data.transactions);
+
       if (data.error) {
         setErrorMessage(data.error);
         return;
@@ -467,30 +470,51 @@ function App() {
               </div>
             </div>
 
-            <h3>Transaction History</h3>
-
-            <div className="transactions-list">
-              {backtestResult.transactions.map((transaction, index) => (
-                <div key={index} className="transaction-row">
-                  <div className="transaction-top">
-                    <strong>#{index + 1}</strong>
-                    <span>{transaction.date}</span>
-                  </div>
-
-                  <p>
-                    <strong>{transaction.type}</strong>
-                  </p>
-
-                  <p>
-                    Invested{" "}
-                    {formatMoney(transaction.amount, backtestResult.currency)} at{" "}
-                    {formatMoney(transaction.price, backtestResult.currency)}
-                  </p>
-
-                  <small>Shares bought: {transaction.shares}</small>
-                </div>
-              ))}
+            <div className="transaction-history-header">
+              <div>
+                <h3>Transaction History</h3>
+                <p>
+                  Showing {backtestResult.transactions?.length ?? 0} of{" "}
+                  {backtestResult.totalTransactions} transactions
+                </p>
+              </div>
             </div>
+
+            {backtestResult.transactions && backtestResult.transactions.length > 0 ? (
+              <div className="backtest-table-container">
+                <table className="backtest-table">
+                  <thead>
+                    <tr>
+                      <th>No.</th>
+                      <th>Date</th>
+                      <th>Type</th>
+                      <th>Amount</th>
+                      <th>Price</th>
+                      <th>Shares</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {backtestResult.transactions.map((transaction, index) => (
+                      <tr key={`${transaction.date}-${index}`}>
+                        <td>{index + 1}</td>
+                        <td>{transaction.date}</td>
+                        <td>
+                          <span className="transaction-type">{transaction.type}</span>
+                        </td>
+                        <td>{formatMoney(transaction.amount, backtestResult.currency)}</td>
+                        <td>{formatMoney(transaction.price, backtestResult.currency)}</td>
+                        <td>{transaction.shares.toFixed(1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="empty-text">
+                No transaction details were returned by the backend.
+              </p>
+            )}
           </div>
         )}
       </div>
