@@ -20,7 +20,7 @@ type StockPrice = {
   marketCap: number | null;
 };
 
-type RecurringFrequency = "weekly" | "monthly";
+type RecurringFrequency = "daily" | "weekly" | "monthly" | "yearly";
 
 type BacktestResult = {
   symbol: string;
@@ -42,6 +42,18 @@ type BacktestResult = {
     type: string;
   }[];
 };
+
+type InfoTipProps = {
+  text: string;
+};
+
+function InfoTip({ text }: InfoTipProps) {
+  return (
+    <span className="info-tip" tabIndex={0} aria-label={text}>
+      ?
+    </span>
+  );
+}
 
 function App() {
   const [stockSearch, setStockSearch] = useState<string>("");
@@ -230,62 +242,53 @@ function App() {
       <div className="card">
         <h1>Finance Backtester</h1>
 
-        <div className="stock-search-box">
-          <input
-            type="text"
-            placeholder="Enter stock symbol or company name"
-            value={stockSearch}
-            onChange={(e) => {
-              const value = e.target.value;
-              setStockSearch(value);
-              setStockSymbol(value.toUpperCase());
-              setBacktestResult(null);
-              searchStocks(value);
-            }}
-          />
+        <p className="intro-text">
+          Search a stock, choose when you started investing, then enter your initial and recurring investment amount.
+        </p>
 
-          {isSearching && <p className="helper-text">Searching...</p>}
+        <div className="field-group stock-search-box">
+        <label className="field-label">
+          Stock
+          <InfoTip text="Search by ticker symbol like AAPL, TSLA, D05.SI, or by company name like Apple or DBS." />
+        </label>
 
-          {showDropdown && stockOptions.length > 0 && (
-            <ul className="dropdown">
-              {stockOptions.map((stock) => (
-                <li key={stock.symbol} onClick={() => handleSelectStock(stock)}>
-                  <strong>{stock.symbol}</strong> - {stock.name}
-                  <br />
-                  <small>
-                    {stock.exchange} | {stock.quoteType}
-                  </small>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <input
+          type="text"
+          placeholder="Enter stock symbol or company name"
+          value={stockSearch}
+          onChange={(e) => {
+            const value = e.target.value;
+            setStockSearch(value);
+            setStockSymbol(value.toUpperCase());
+            setBacktestResult(null);
+            searchStocks(value);
+          }}
+        />
 
-        {isPriceLoading && <p className="helper-text">Loading price...</p>}
+        {isSearching && <p className="helper-text">Searching...</p>}
 
-        {stockPrice && (
-          <div className="price-card">
-            <p className="stock-name">{stockPrice.name}</p>
-
-            <p className="stock-price">
-              {stockPrice.price !== null ? stockPrice.price : "N/A"}{" "}
-              {stockPrice.currency}
-            </p>
-
-            <div className="price-details">
-              <p>Symbol: {stockPrice.symbol}</p>
-              <p>
-                Previous Close:{" "}
-                {stockPrice.previousClose !== null
-                  ? stockPrice.previousClose
-                  : "N/A"}
-              </p>
-              <p>Market Cap: {formatMarketCap(stockPrice.marketCap)}</p>
-            </div>
-          </div>
+        {showDropdown && stockOptions.length > 0 && (
+          <ul className="dropdown">
+            {stockOptions.map((stock) => (
+              <li key={stock.symbol} onClick={() => handleSelectStock(stock)}>
+                <strong>{stock.symbol}</strong> - {stock.name}
+                <br />
+                <small>
+                  {stock.exchange} | {stock.quoteType}
+                </small>
+              </li>
+            ))}
+          </ul>
         )}
+      </div>
 
-        <div className="input-row">
+      <div className="input-row">
+        <div className="field-group">
+          <label className="field-label">
+            Start Date
+            <InfoTip text="Choose the date you want the backtest to begin. If the market was closed or the stock did not exist yet, the app uses the next available trading day." />
+          </label>
+
           <input
             type="date"
             value={startDate}
@@ -294,6 +297,13 @@ function App() {
               setBacktestResult(null);
             }}
           />
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">
+            Principal Amount
+            <InfoTip text="This is your first lump-sum investment. Example: if you started with $1,000, enter 1000." />
+          </label>
 
           <input
             type="number"
@@ -305,8 +315,15 @@ function App() {
             }}
           />
         </div>
+      </div>
 
-        <div className="input-row">
+      <div className="input-row">
+        <div className="field-group">
+          <label className="field-label">
+            Recurring Amount
+            <InfoTip text="This is the extra amount invested repeatedly. Example: enter 100 if you invest $100 every week or month." />
+          </label>
+
           <input
             type="number"
             placeholder="Recurring amount"
@@ -316,7 +333,13 @@ function App() {
               setBacktestResult(null);
             }}
           />
+        </div>
 
+        <div className="field-group">
+          <label className="field-label">
+            Frequency
+            <InfoTip text="Choose how often the recurring amount is invested: daily, weekly, monthly, or yearly. If the selected date is not a trading day, the app uses the next available trading day." />
+          </label>
           <select
             value={recurringFrequency}
             onChange={(e) => {
@@ -324,10 +347,14 @@ function App() {
               setBacktestResult(null);
             }}
           >
-            <option value="monthly">Invest monthly</option>
+            <option value="daily">Invest daily</option>
             <option value="weekly">Invest weekly</option>
+            <option value="monthly">Invest monthly</option>
+            <option value="yearly">Invest yearly</option>
           </select>
+
         </div>
+      </div>
 
         <button onClick={runBacktest} disabled={isBacktesting}>
           {isBacktesting ? "Calculating..." : "Calculate Backtest"}
@@ -337,77 +364,101 @@ function App() {
 
         {backtestResult && (
           <div className="result-card">
-            <h2>Backtest Result</h2>
+            <div className="result-header">
+              <div>
+                <h2>Backtest Result</h2>
+                <p className="result-subtitle">
+                  {backtestResult.symbol} • {backtestResult.startDate} to{" "}
+                  {backtestResult.latestDate}
+                </p>
+              </div>
+            </div>
 
-            <p>
-              <strong>Stock:</strong> {backtestResult.symbol}
-            </p>
+            <div className="summary-grid">
+              <div className="summary-tile">
+                <span className="summary-label">Total Invested</span>
+                <strong>
+                  {formatMoney(
+                    backtestResult.totalInvested,
+                    backtestResult.currency
+                  )}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Period:</strong> {backtestResult.startDate} to{" "}
-              {backtestResult.latestDate}
-            </p>
+              <div className="summary-tile">
+                <span className="summary-label">Current Value</span>
+                <strong>
+                  {formatMoney(
+                    backtestResult.currentValue,
+                    backtestResult.currency
+                  )}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Latest Price:</strong>{" "}
-              {formatMoney(
-                backtestResult.latestPrice,
-                backtestResult.currency
-              )}
-            </p>
+              <div className="summary-tile">
+                <span className="summary-label">Total Shares</span>
+                <strong>{backtestResult.totalShares}</strong>
+              </div>
 
-            <hr />
+              <div className="summary-tile">
+                <span className="summary-label">Latest Price</span>
+                <strong>
+                  {formatMoney(
+                    backtestResult.latestPrice,
+                    backtestResult.currency
+                  )}
+                </strong>
+              </div>
+            </div>
 
-            <p>
-              <strong>Total Invested:</strong>{" "}
-              {formatMoney(
-                backtestResult.totalInvested,
-                backtestResult.currency
-              )}
-            </p>
+            <div
+              className={`gain-loss-banner ${
+                backtestResult.gainLoss >= 0 ? "positive" : "negative"
+              }`}
+            >
+              <span>Gain / Loss</span>
+              <strong>
+                {formatMoney(backtestResult.gainLoss, backtestResult.currency)} (
+                {backtestResult.gainLossPercent}%)
+              </strong>
+            </div>
 
-            <p>
-              <strong>Total Shares:</strong> {backtestResult.totalShares}
-            </p>
+            <div className="details-grid">
+              <div className="detail-box">
+                <span className="detail-label">Buy Transactions</span>
+                <strong>{backtestResult.totalTransactions}</strong>
+              </div>
 
-            <p>
-              <strong>Current Value:</strong>{" "}
-              {formatMoney(
-                backtestResult.currentValue,
-                backtestResult.currency
-              )}
-            </p>
+              <div className="detail-box">
+                <span className="detail-label">Currency</span>
+                <strong>{backtestResult.currency || "N/A"}</strong>
+              </div>
+            </div>
 
-            <p>
-              <strong>Gain/Loss:</strong>{" "}
-              {formatMoney(backtestResult.gainLoss, backtestResult.currency)} (
-              {backtestResult.gainLossPercent}%)
-            </p>
-
-            <p>
-              <strong>Total Buy Transactions:</strong>{" "}
-              {backtestResult.totalTransactions}
-            </p>
-
-            <h3>Latest Transactions</h3>
+            <h3>Transaction History</h3>
 
             <div className="transactions-list">
-            {backtestResult.transactions.map((transaction, index) => (
-              <div key={index} className="transaction-row">
-                <p>
-                  <strong>{index + 1}.</strong> {transaction.date} | {transaction.type}
-                </p>
+              {backtestResult.transactions.map((transaction, index) => (
+                <div key={index} className="transaction-row">
+                  <div className="transaction-top">
+                    <strong>#{index + 1}</strong>
+                    <span>{transaction.date}</span>
+                  </div>
 
-                <p>
-                  Invested:{" "}
-                  {formatMoney(transaction.amount, backtestResult.currency)} at{" "}
-                  {formatMoney(transaction.price, backtestResult.currency)}
-                </p>
+                  <p>
+                    <strong>{transaction.type}</strong>
+                  </p>
 
-                <small>Shares bought: {transaction.shares}</small>
-              </div>
-            ))}
-          </div>
+                  <p>
+                    Invested{" "}
+                    {formatMoney(transaction.amount, backtestResult.currency)} at{" "}
+                    {formatMoney(transaction.price, backtestResult.currency)}
+                  </p>
+
+                  <small>Shares bought: {transaction.shares}</small>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>

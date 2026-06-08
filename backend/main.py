@@ -26,7 +26,7 @@ class BacktestRequest(BaseModel):
     startDate: str
     principal: float = Field(ge=0)
     recurringAmount: float = Field(ge=0)
-    recurringFrequency: Literal["weekly", "monthly"]
+    recurringFrequency: Literal["daily", "weekly", "monthly", "yearly"]
 
 @app.get("/")
 def home():
@@ -52,10 +52,25 @@ def add_one_month(input_date: date):
 
     return input_date.replace(year=new_year, month=new_month, day=new_day)
 
+def add_one_year(input_date: date):
+    try:
+        return input_date.replace(year=input_date.year + 1)
+    except ValueError:
+        # Handles leap year Feb 29
+        return input_date.replace(year=input_date.year + 1, day=28)
 
 def add_period(input_date: date, frequency: str):
+    if frequency == "daily":
+        return input_date + timedelta(days=1)
+
     if frequency == "weekly":
         return input_date + timedelta(weeks=1)
+
+    if frequency == "monthly":
+        return add_one_month(input_date)
+
+    if frequency == "yearly":
+        return add_one_year(input_date)
 
     return add_one_month(input_date)
 
