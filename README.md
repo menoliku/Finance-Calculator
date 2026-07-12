@@ -267,6 +267,14 @@ The backend will run at:
 http://127.0.0.1:8000
 ```
 
+Run the backend test suite (unit tests for backtest date math, recommendation
+scoring, and risk/style classification):
+
+```bash
+cd backend
+python -m pytest test_main.py -v
+```
+
 You can test the backend by visiting:
 
 ```txt
@@ -322,6 +330,24 @@ Render settings:
 | Root Directory | `backend`                                      |
 | Build Command  | `pip install -r requirements.txt`              |
 | Start Command  | `uvicorn main:app --host 0.0.0.0 --port $PORT` |
+
+Set these environment variables on Render (Settings -> Environment):
+
+| Variable         | Value                                                         |
+| ---------------- | -------------------------------------------------------------- |
+| `JWT_SECRET_KEY` | A long random secret, e.g. generate one with `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `DATABASE_URL`   | The connection string of a Render PostgreSQL instance (Internal Database URL) |
+
+Without `JWT_SECRET_KEY`, the backend falls back to a random key generated at process
+startup -- every restart invalidates all logged-in sessions.
+
+Without `DATABASE_URL`, the backend falls back to a local SQLite file. That is fine for
+local development but **must not be used in production**: Render's filesystem is
+ephemeral, so every deploy or restart would permanently delete all user data. Create a
+Render PostgreSQL instance (the free tier works) and paste its Internal Database URL.
+Both `postgres://` and `postgresql://` URL schemes are accepted.
+
+Both variables are required before real users create accounts.
 
 Make sure the backend CORS settings allow the deployed GitHub Pages frontend:
 

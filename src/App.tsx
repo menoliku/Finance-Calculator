@@ -1,8 +1,29 @@
 import { useState } from "react";
 import "./App.css";
+import StockAnalysis from "./components/StockAnalysis";
+import StockRecommendations from "./components/StockRecommendations";
+import Watchlist from "./components/Watchlist";
+import StockComparison from "./components/StockComparison";
+import Sidebar from "./components/Sidebar";
+import PriceChart from "./components/PriceChart";
+import InfoTip from "./components/InfoTip";
+import Money from "./components/Money";
+import Tools from "./components/Tools";
+import Portfolio from "./components/Portfolio";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+export type TabKey =
+  | "calculator"
+  | "analysis"
+  | "recommendations"
+  | "watchlist"
+  | "compare"
+  | "money"
+  | "tools"
+  | "portfolio";
 
 type Stock = {
   symbol: string;
@@ -33,6 +54,7 @@ type BacktestResult = {
   currentValue: number;
   gainLoss: number;
   gainLossPercent: number;
+  totalDividendsReceived: number;
   totalTransactions: number;
   transactions: {
     date: string;
@@ -41,19 +63,8 @@ type BacktestResult = {
     shares: number;
     type: string;
   }[];
+  portfolioValueHistory: { date: string; value: number }[];
 };
-
-type InfoTipProps = {
-  text: string;
-};
-
-function InfoTip({ text }: InfoTipProps) {
-  return (
-    <span className="info-tip" tabIndex={0} aria-label={text}>
-      ?
-    </span>
-  );
-}
 
 function App() {
   const [stockSearch, setStockSearch] = useState<string>("");
@@ -62,6 +73,7 @@ function App() {
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
 
   const [stockPrice, setStockPrice] = useState<StockPrice | null>(null);
+  const [activeTab, setActiveTab] = useState<TabKey>("calculator");
 
   const [startDate, setStartDate] = useState<string>("");
   const [principal, setPrincipal] = useState<number>(0);
@@ -72,6 +84,8 @@ function App() {
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(
     null
   );
+  const [transactionPage, setTransactionPage] = useState<number>(0);
+  const TRANSACTIONS_PER_PAGE = 10;
 
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [isPriceLoading, setIsPriceLoading] = useState<boolean>(false);
@@ -197,6 +211,7 @@ function App() {
       }
 
       setBacktestResult(data);
+      setTransactionPage(0);
     } catch (error) {
       console.error(error);
       setErrorMessage("Cannot connect to backend.");
@@ -211,6 +226,15 @@ function App() {
     setShowDropdown(false);
     setBacktestResult(null);
     getStockPrice(stock.symbol);
+  }
+
+  function handleSelectSymbolFromWatchlist(symbol: string) {
+    setStockSymbol(symbol);
+    setStockSearch(symbol);
+    setShowDropdown(false);
+    setBacktestResult(null);
+    getStockPrice(symbol);
+    setActiveTab("analysis");
   }
 
   function formatMarketCap(value: number | null) {
@@ -240,9 +264,48 @@ function App() {
     })}`;
   }
 
+  function handleDownloadTransactionsCsv() {
+    if (!backtestResult || !backtestResult.transactions?.length) {
+      return;
+    }
+
+    const header = ["No.", "Date", "Type", "Amount", "Price", "Shares", "Currency"];
+
+    const rows = backtestResult.transactions.map((transaction, index) => [
+      String(index + 1),
+      transaction.date,
+      transaction.type,
+      transaction.amount.toFixed(2),
+      transaction.price.toFixed(4),
+      transaction.shares.toFixed(6),
+      backtestResult.currency,
+    ]);
+
+    // Quote every field and escape embedded quotes -- transaction "type" can
+    // contain a comma (e.g. "initial + monthly"), which would otherwise break
+    // column alignment when opened in a spreadsheet.
+    const csvContent = [header, ...rows]
+      .map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(","))
+      .join("\r\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${backtestResult.symbol}_backtest_${backtestResult.startDate}_to_${backtestResult.latestDate}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="page">
+      <Sidebar activeTab={activeTab} onSelectTab={setActiveTab} />
+
       <div className="card">
+        {/* Keyed by tab so a crash in one tab resets when the user navigates away. */}
+        <ErrorBoundary key={activeTab}>
         <h1>Finance Backtester</h1>
 
         <p className="intro-text">
@@ -317,6 +380,32 @@ function App() {
         </div>
       )}
 
+      {activeTab === "analysis" && (
+        <>
+          {stockPrice ? (
+            <StockAnalysis symbol={stockSymbol} />
+          ) : (
+            <p className="empty-text">
+              Search and select a stock above to see its analysis.
+            </p>
+          )}
+        </>
+      )}
+
+      {activeTab === "recommendations" && <StockRecommendations />}
+
+      {activeTab === "watchlist" && <Watchlist onSelectSymbol={handleSelectSymbolFromWatchlist} />}
+
+      {activeTab === "compare" && <StockComparison />}
+
+      {activeTab === "money" && <Money />}
+
+      {activeTab === "tools" && <Tools />}
+
+      {activeTab === "portfolio" && <Portfolio />}
+
+      {activeTab === "calculator" && (
+        <>
       <div className="input-row">
         <div className="field-group">
           <label className="field-label">
@@ -409,6 +498,18 @@ function App() {
               </div>
             </div>
 
+            {backtestResult.portfolioValueHistory.length > 1 && (
+              <div>
+                <h3>Portfolio Value Over Time</h3>
+                <PriceChart
+                  data={backtestResult.portfolioValueHistory.map((point) => ({
+                    date: point.date,
+                    close: point.value,
+                  }))}
+                />
+              </div>
+            )}
+
             <div className="summary-grid">
               <div className="summary-tile">
                 <span className="summary-label">Total Invested</span>
@@ -468,6 +569,16 @@ function App() {
                 <span className="detail-label">Currency</span>
                 <strong>{backtestResult.currency || "N/A"}</strong>
               </div>
+
+              <div className="detail-box">
+                <span className="detail-label">Total Dividends Received</span>
+                <strong>
+                  {formatMoney(
+                    backtestResult.totalDividendsReceived,
+                    backtestResult.currency
+                  )}
+                </strong>
+              </div>
             </div>
 
             <div className="transaction-history-header">
@@ -478,38 +589,101 @@ function App() {
                   {backtestResult.totalTransactions} transactions
                 </p>
               </div>
+
+              {backtestResult.transactions && backtestResult.transactions.length > 0 && (
+                <button
+                  type="button"
+                  className="csv-download-button"
+                  onClick={handleDownloadTransactionsCsv}
+                >
+                  Download CSV
+                </button>
+              )}
             </div>
 
             {backtestResult.transactions && backtestResult.transactions.length > 0 ? (
-              <div className="backtest-table-container">
-                <table className="backtest-table">
-                  <thead>
-                    <tr>
-                      <th>No.</th>
-                      <th>Date</th>
-                      <th>Type</th>
-                      <th>Amount</th>
-                      <th>Price</th>
-                      <th>Shares</th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {backtestResult.transactions.map((transaction, index) => (
-                      <tr key={`${transaction.date}-${index}`}>
-                        <td>{index + 1}</td>
-                        <td>{transaction.date}</td>
-                        <td>
-                          <span className="transaction-type">{transaction.type}</span>
-                        </td>
-                        <td>{formatMoney(transaction.amount, backtestResult.currency)}</td>
-                        <td>{formatMoney(transaction.price, backtestResult.currency)}</td>
-                        <td>{transaction.shares.toFixed(1)}</td>
+              <>
+                <p className="table-scroll-hint">Swipe left/right to see more →</p>
+                <div className="backtest-table-container">
+                  <table className="backtest-table">
+                    <thead>
+                      <tr>
+                        <th>No.</th>
+                        <th>Date</th>
+                        <th>Type</th>
+                        <th>Amount</th>
+                        <th>Price</th>
+                        <th>Shares</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+
+                    <tbody>
+                      {backtestResult.transactions
+                        .slice(
+                          transactionPage * TRANSACTIONS_PER_PAGE,
+                          (transactionPage + 1) * TRANSACTIONS_PER_PAGE
+                        )
+                        .map((transaction, index) => (
+                          <tr key={`${transaction.date}-${index}`}>
+                            <td>
+                              {transactionPage * TRANSACTIONS_PER_PAGE + index + 1}
+                            </td>
+                            <td>{transaction.date}</td>
+                            <td>
+                              <span className="transaction-type">{transaction.type}</span>
+                            </td>
+                            <td>{formatMoney(transaction.amount, backtestResult.currency)}</td>
+                            <td>{formatMoney(transaction.price, backtestResult.currency)}</td>
+                            <td>{transaction.shares.toFixed(4)}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {backtestResult.transactions.length > TRANSACTIONS_PER_PAGE && (
+                  <div className="pagination">
+                    <button
+                      type="button"
+                      onClick={() => setTransactionPage((page) => Math.max(0, page - 1))}
+                      disabled={transactionPage === 0}
+                    >
+                      Previous
+                    </button>
+
+                    <span className="pagination-label">
+                      Page {transactionPage + 1} of{" "}
+                      {Math.ceil(
+                        backtestResult.transactions.length / TRANSACTIONS_PER_PAGE
+                      )}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setTransactionPage((page) =>
+                          Math.min(
+                            Math.ceil(
+                              backtestResult.transactions.length /
+                                TRANSACTIONS_PER_PAGE
+                            ) - 1,
+                            page + 1
+                          )
+                        )
+                      }
+                      disabled={
+                        transactionPage >=
+                        Math.ceil(
+                          backtestResult.transactions.length / TRANSACTIONS_PER_PAGE
+                        ) -
+                          1
+                      }
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </>
             ) : (
               <p className="empty-text">
                 No transaction details were returned by the backend.
@@ -517,6 +691,9 @@ function App() {
             )}
           </div>
         )}
+        </>
+      )}
+        </ErrorBoundary>
       </div>
     </div>
   );
