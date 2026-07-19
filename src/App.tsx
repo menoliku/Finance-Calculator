@@ -10,6 +10,7 @@ import InfoTip from "./components/InfoTip";
 import Money from "./components/Money";
 import Tools from "./components/Tools";
 import Portfolio from "./components/Portfolio";
+import AdminPanel from "./components/AdminPanel";
 import ErrorBoundary from "./components/ErrorBoundary";
 
 const API_BASE_URL =
@@ -23,7 +24,8 @@ export type TabKey =
   | "compare"
   | "money"
   | "tools"
-  | "portfolio";
+  | "portfolio"
+  | "admin";
 
 type Stock = {
   symbol: string;
@@ -403,6 +405,8 @@ function App() {
       {activeTab === "tools" && <Tools />}
 
       {activeTab === "portfolio" && <Portfolio />}
+
+      {activeTab === "admin" && <AdminPanel />}
 
       {activeTab === "calculator" && (
         <>

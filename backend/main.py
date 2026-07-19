@@ -167,6 +167,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     subscription_tier = Column(String, nullable=False, default="free")
+    role = Column(String, nullable=False, default="user")
 
 
 class WatchlistItem(Base):
@@ -264,6 +265,13 @@ with engine.connect() as _connection:
     )
     _connection.commit()
 
+if "role" not in _existing_columns:
+    with engine.connect() as _connection:
+        _connection.execute(
+            text("ALTER TABLE users ADD COLUMN role VARCHAR DEFAULT 'user'")
+        )
+        _connection.commit()
+
 class RegisterRequest(BaseModel):
     username: str
     email: str
@@ -335,6 +343,13 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="User not found")
 
     return user
+
+
+def require_developer(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role != "developer":
+        raise HTTPException(status_code=403, detail="Developer access required")
+
+    return current_user
 
 
 def get_optional_user(
@@ -496,15 +511,20 @@ def login_user(request: Request, payload: LoginRequest, db: Session = Depends(ge
     }
 
 
-@app.get("/auth/me")
-def get_me(current_user: User = Depends(get_current_user)):
+def user_payload(user: User) -> dict:
     return {
-        "id": current_user.id,
-        "username": current_user.username,
-        "email": current_user.email,
-        "subscriptionTier": current_user.subscription_tier,
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "subscriptionTier": user.subscription_tier,
+        "role": user.role,
         "billingEnabled": billing_enabled(),
     }
+
+
+@app.get("/auth/me")
+def get_me(current_user: User = Depends(get_current_user)):
+    return user_payload(current_user)
 
 
 class SubscriptionRequest(BaseModel):
@@ -527,7 +547,9 @@ def set_subscription(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if payload.tier != "free" and not billing_enabled():
+    # Developers may switch their own tier freely (for testing gated features);
+    # everyone else needs real billing once it exists.
+    if payload.tier != "free" and not billing_enabled() and current_user.role != "developer":
         raise HTTPException(
             status_code=403,
             detail="Paid plans are coming soon. All current features marked Free are available during the beta."
@@ -537,12 +559,102 @@ def set_subscription(
     db.commit()
     db.refresh(current_user)
 
+    return user_payload(current_user)
+
+
+# ---------------------------------------------------------------------------
+# Developer role: activated by a secret code, can grant tiers to any user
+# ---------------------------------------------------------------------------
+
+def is_valid_developer_code(code: str) -> bool:
+    """True only when DEVELOPER_ACCESS_CODE is configured to a non-empty value
+    and the submitted code matches it (constant-time compare). An unset or
+    empty env var means developer access is off -- misconfiguration must
+    never open the door."""
+    configured = os.environ.get("DEVELOPER_ACCESS_CODE", "")
+
+    if not configured or not code:
+        return False
+
+    return secrets.compare_digest(code, configured)
+
+
+class DeveloperActivationRequest(BaseModel):
+    code: str
+
+
+@app.post("/auth/developer")
+@limiter.limit("5/minute")  # brute-force guard on the access code
+def activate_developer(
+    request: Request,
+    payload: DeveloperActivationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not os.environ.get("DEVELOPER_ACCESS_CODE"):
+        raise HTTPException(status_code=403, detail="Developer access is not configured")
+
+    if not is_valid_developer_code(payload.code):
+        raise HTTPException(status_code=403, detail="Invalid developer code")
+
+    current_user.role = "developer"
+    db.commit()
+    db.refresh(current_user)
+
+    logger.info("Developer role activated for user id=%s (%s)", current_user.id, current_user.username)
+
+    return user_payload(current_user)
+
+
+@app.get("/admin/users")
+def admin_list_users(
+    current_user: User = Depends(require_developer),
+    db: Session = Depends(get_db)
+):
+    users = db.query(User).order_by(User.id).all()
+
     return {
-        "id": current_user.id,
-        "username": current_user.username,
-        "email": current_user.email,
-        "subscriptionTier": current_user.subscription_tier,
-        "billingEnabled": billing_enabled(),
+        "users": [
+            {
+                "id": u.id,
+                "username": u.username,
+                "email": u.email,
+                "subscriptionTier": u.subscription_tier,
+                "role": u.role,
+            }
+            for u in users
+        ]
+    }
+
+
+@app.post("/admin/users/{user_id}/tier")
+def admin_set_user_tier(
+    user_id: int,
+    payload: SubscriptionRequest,
+    current_user: User = Depends(require_developer),
+    db: Session = Depends(get_db)
+):
+    # Deliberately NOT gated by billing_enabled(): a developer grant is the
+    # legitimate way to comp beta testers into paid tiers before billing exists.
+    target = db.query(User).filter(User.id == user_id).first()
+
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    target.subscription_tier = payload.tier
+
+    db.commit()
+
+    logger.info(
+        "Developer id=%s granted tier '%s' to user id=%s (%s)",
+        current_user.id, payload.tier, target.id, target.username,
+    )
+
+    return {
+        "id": target.id,
+        "username": target.username,
+        "subscriptionTier": target.subscription_tier,
+        "role": target.role,
     }
 
 

@@ -1,6 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AuthPanel from "./AuthPanel";
+import { authFetch, getToken, onAuthChange } from "../auth";
 import type { TabKey } from "../App";
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 type SidebarProps = {
   activeTab: TabKey;
@@ -20,6 +24,36 @@ const NAV_ITEMS: { key: TabKey; label: string }[] = [
 
 export default function Sidebar({ activeTab, onSelectTab }: SidebarProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [isDeveloper, setIsDeveloper] = useState(false);
+
+  // The Admin nav item only exists for developer accounts.
+  useEffect(() => {
+    async function checkRole() {
+      if (!getToken()) {
+        setIsDeveloper(false);
+        return;
+      }
+
+      try {
+        const response = await authFetch(`${API_BASE_URL}/auth/me`);
+        if (!response.ok) {
+          throw new Error("Session expired");
+        }
+        const data = await response.json();
+        setIsDeveloper(data.role === "developer");
+      } catch {
+        setIsDeveloper(false);
+      }
+    }
+
+    checkRole();
+    const unsubscribe = onAuthChange(checkRole);
+    return unsubscribe;
+  }, []);
+
+  const navItems = isDeveloper
+    ? [...NAV_ITEMS, { key: "admin" as TabKey, label: "Admin" }]
+    : NAV_ITEMS;
 
   function handleSelect(tab: TabKey) {
     onSelectTab(tab);
@@ -63,7 +97,7 @@ export default function Sidebar({ activeTab, onSelectTab }: SidebarProps) {
           <AuthPanel />
 
           <nav className="sidebar-nav">
-            {NAV_ITEMS.map((item) => (
+            {navItems.map((item) => (
               <button
                 key={item.key}
                 type="button"

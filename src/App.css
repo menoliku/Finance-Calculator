@@ -1364,6 +1364,49 @@ hr {
   color: #c484fc;
 }
 
+.tier-badge-dev {
+  background: rgba(94, 234, 212, 0.12);
+  border: 1px dashed rgba(94, 234, 212, 0.5);
+  color: #5eead4;
+}
+
+.dev-code-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dev-code-form input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 0.85rem;
+}
+
+.dev-code-form button {
+  width: auto;
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 0.82rem;
+}
+
+.dev-code-form .error-text {
+  width: 100%;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.dev-code-link {
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.admin-tier-options {
+  display: flex;
+  flex-wrap: nowrap;
+}
+
 .sentiment-badge.sentiment-locked {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.16);

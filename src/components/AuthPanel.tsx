@@ -15,6 +15,7 @@ type CurrentUser = {
   username: string;
   email: string;
   subscriptionTier: Tier;
+  role: "user" | "developer";
   billingEnabled: boolean;
 };
 
@@ -34,6 +35,11 @@ export default function AuthPanel() {
   const [isUpgrading, setIsUpgrading] = useState<boolean>(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState<boolean>(false);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
+
+  const [showDevCodeInput, setShowDevCodeInput] = useState<boolean>(false);
+  const [devCode, setDevCode] = useState<string>("");
+  const [devCodeError, setDevCodeError] = useState<string>("");
+  const [isActivatingDev, setIsActivatingDev] = useState<boolean>(false);
 
   useEffect(() => {
     let isCancelled = false;
@@ -232,6 +238,42 @@ export default function AuthPanel() {
     }
   }
 
+  async function handleActivateDeveloper(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (devCode.trim() === "") {
+      return;
+    }
+
+    try {
+      setIsActivatingDev(true);
+      setDevCodeError("");
+
+      const response = await fetch(`${API_BASE_URL}/auth/developer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ code: devCode.trim() }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not activate developer access.");
+      }
+
+      setUser(data);
+      setShowDevCodeInput(false);
+      setDevCode("");
+      notifyAuthChange(); // role changed -- Sidebar shows the Admin tab
+    } catch (error) {
+      setDevCodeError(
+        error instanceof Error ? error.message : "Could not activate developer access."
+      );
+    } finally {
+      setIsActivatingDev(false);
+    }
+  }
+
   return (
     <div className="sidebar-auth">
       {user ? (
@@ -241,13 +283,17 @@ export default function AuthPanel() {
             <span className={`tier-badge tier-badge-${user.subscriptionTier}`}>
               {TIER_LABELS[user.subscriptionTier] ?? "Free"}
             </span>
+            {user.role === "developer" && (
+              <span className="tier-badge tier-badge-dev">Developer</span>
+            )}
           </div>
 
           <div className="tier-picker">
             <span className="tier-picker-label">Plan</span>
             <div className="tier-picker-options">
               {TIERS.map((tier) => {
-                const isLocked = tier !== "free" && !user.billingEnabled;
+                const isLocked =
+                  tier !== "free" && !user.billingEnabled && user.role !== "developer";
 
                 return (
                   <button
@@ -266,12 +312,39 @@ export default function AuthPanel() {
                 );
               })}
             </div>
-            {!user.billingEnabled && (
+            {!user.billingEnabled && user.role !== "developer" && (
               <p className="tier-picker-note">
                 Paid plans launch soon — enjoy the beta for free.
               </p>
             )}
           </div>
+
+          {user.role !== "developer" && (
+            <>
+              {showDevCodeInput ? (
+                <form className="dev-code-form" onSubmit={handleActivateDeveloper}>
+                  <input
+                    type="password"
+                    placeholder="Developer code"
+                    value={devCode}
+                    onChange={(e) => setDevCode(e.target.value)}
+                  />
+                  <button type="submit" disabled={isActivatingDev}>
+                    {isActivatingDev ? "..." : "Apply"}
+                  </button>
+                  {devCodeError && <p className="error-text">{devCodeError}</p>}
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  className="auth-link-button sidebar-auth-button dev-code-link"
+                  onClick={() => setShowDevCodeInput(true)}
+                >
+                  Have a developer code?
+                </button>
+              )}
+            </>
+          )}
 
           <button
             type="button"

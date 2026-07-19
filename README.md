@@ -337,6 +337,7 @@ Set these environment variables on Render (Settings -> Environment):
 | ---------------- | -------------------------------------------------------------- |
 | `JWT_SECRET_KEY` | A long random secret, e.g. generate one with `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `DATABASE_URL`   | The connection string of a Render PostgreSQL instance (Internal Database URL) |
+| `DEVELOPER_ACCESS_CODE` | Optional. A long random secret that upgrades an account to the developer role (Admin tab: grant paid tiers to beta testers). Leave unset to disable developer access entirely. Never share it. |
 
 Without `JWT_SECRET_KEY`, the backend falls back to a random key generated at process
 startup -- every restart invalidates all logged-in sessions.

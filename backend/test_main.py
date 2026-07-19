@@ -257,6 +257,32 @@ def test_has_tier_unknown_tier_string_is_treated_as_free():
 
 
 # ---------------------------------------------------------------------------
+# Developer access code validation
+# ---------------------------------------------------------------------------
+
+def test_developer_code_rejected_when_env_unset(monkeypatch):
+    monkeypatch.delenv("DEVELOPER_ACCESS_CODE", raising=False)
+    assert main.is_valid_developer_code("anything") is False
+
+
+def test_developer_code_rejected_when_env_empty(monkeypatch):
+    monkeypatch.setenv("DEVELOPER_ACCESS_CODE", "")
+    assert main.is_valid_developer_code("") is False
+    assert main.is_valid_developer_code("anything") is False
+
+
+def test_developer_code_rejects_wrong_code(monkeypatch):
+    monkeypatch.setenv("DEVELOPER_ACCESS_CODE", "secret-code")
+    assert main.is_valid_developer_code("wrong") is False
+    assert main.is_valid_developer_code("") is False
+
+
+def test_developer_code_accepts_correct_code(monkeypatch):
+    monkeypatch.setenv("DEVELOPER_ACCESS_CODE", "secret-code")
+    assert main.is_valid_developer_code("secret-code") is True
+
+
+# ---------------------------------------------------------------------------
 # Portfolios: compute_holdings (average-cost ledger math)
 # ---------------------------------------------------------------------------
 
