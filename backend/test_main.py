@@ -257,6 +257,189 @@ def test_has_tier_unknown_tier_string_is_treated_as_free():
 
 
 # ---------------------------------------------------------------------------
+# Price projection: historical stats, RSI, signals, composite score, Monte Carlo
+# ---------------------------------------------------------------------------
+
+import numpy as np
+
+
+def test_historical_stats_flat_series_has_zero_drift_and_volatility():
+    flat = [100.0] * 60
+    stats = main.compute_historical_stats(flat)
+    assert stats["annualDrift"] == 0.0
+    assert stats["annualVolatility"] == 0.0
+
+
+def test_historical_stats_uptrend_has_positive_drift():
+    uptrend = [100.0 * (1.001 ** i) for i in range(252)]
+    stats = main.compute_historical_stats(uptrend)
+    assert stats["annualDrift"] > 0
+    assert stats["rawAnnualDrift"] > 0
+
+
+def test_historical_stats_downtrend_has_negative_drift():
+    downtrend = [100.0 * (0.999 ** i) for i in range(252)]
+    stats = main.compute_historical_stats(downtrend)
+    assert stats["annualDrift"] < 0
+
+
+def test_historical_stats_shrinks_drift_toward_zero():
+    uptrend = [100.0 * (1.002 ** i) for i in range(252)]
+    stats = main.compute_historical_stats(uptrend)
+    # Shrunk drift must be smaller in magnitude than the raw historical drift.
+    assert abs(stats["annualDrift"]) < abs(stats["rawAnnualDrift"])
+
+
+def test_historical_stats_insufficient_data_returns_zeros():
+    stats = main.compute_historical_stats([100.0])
+    assert stats == {"annualDrift": 0.0, "annualVolatility": 0.0, "rawAnnualDrift": 0.0}
+
+
+def test_rsi_monotonic_increase_is_near_100():
+    increasing = [100 + i for i in range(30)]
+    assert main.compute_rsi(increasing) > 95
+
+
+def test_rsi_monotonic_decrease_is_near_zero():
+    decreasing = [100 - i for i in range(30)]
+    assert main.compute_rsi(decreasing) < 5
+
+
+def test_rsi_insufficient_history_returns_none():
+    assert main.compute_rsi([100, 101, 102], period=14) is None
+
+
+def test_momentum_signal_uptrend_is_positive():
+    assert main.momentum_signal(current_price=110, sma50=105, sma200=100) > 0
+
+
+def test_momentum_signal_downtrend_is_negative():
+    assert main.momentum_signal(current_price=90, sma50=95, sma200=100) < 0
+
+
+def test_momentum_signal_missing_data_is_neutral():
+    assert main.momentum_signal(None, 105, 100) == 0.0
+
+
+def test_rsi_signal_overbought_is_negative():
+    assert main.rsi_signal(85) < 0
+
+
+def test_rsi_signal_oversold_is_positive():
+    assert main.rsi_signal(15) > 0
+
+
+def test_rsi_signal_mid_range_is_neutral():
+    assert main.rsi_signal(50) == 0.0
+
+
+def test_sentiment_signal_passes_through_clipped():
+    assert main.sentiment_signal(0.5) == 0.5
+    assert main.sentiment_signal(5.0) == 1.0
+    assert main.sentiment_signal(None) == 0.0
+
+
+def test_analyst_signal_strong_buy_is_positive():
+    assert main.analyst_signal(1.0) == 1.0
+
+
+def test_analyst_signal_strong_sell_is_negative():
+    assert main.analyst_signal(5.0) == -1.0
+
+
+def test_analyst_signal_hold_is_neutral():
+    assert main.analyst_signal(3.0) == 0.0
+
+
+def test_fundamentals_signal_missing_is_neutral():
+    assert main.fundamentals_signal(None) == 0.0
+
+
+def test_fundamentals_signal_extreme_growth_is_bounded():
+    assert main.fundamentals_signal(50.0) <= 1.0
+
+
+def test_composite_score_all_positive_signals_is_positive():
+    signals = {"momentum": 1.0, "rsi": 1.0, "sentiment": 1.0, "analyst": 1.0, "fundamentals": 1.0}
+    assert main.compute_composite_score(signals) == 1.0
+
+
+def test_composite_score_all_negative_signals_is_negative():
+    signals = {"momentum": -1.0, "rsi": -1.0, "sentiment": -1.0, "analyst": -1.0, "fundamentals": -1.0}
+    assert main.compute_composite_score(signals) == -1.0
+
+
+def test_composite_score_mixed_signals_is_weighted_average():
+    signals = {"momentum": 1.0, "rsi": 0.0, "sentiment": 0.0, "analyst": 0.0, "fundamentals": 0.0}
+    assert main.compute_composite_score(signals) == main.SIGNAL_WEIGHTS["momentum"]
+
+
+def test_simulate_price_paths_orders_percentiles_correctly():
+    rng = np.random.default_rng(42)
+    result = main.simulate_price_paths(
+        current_price=100.0, annual_drift=0.05, annual_volatility=0.3,
+        horizon_days=30, num_paths=2000, rng=rng,
+    )
+    assert result["extremeLow"] < result["low"] < result["median"] < result["high"] < result["extremeHigh"]
+
+
+def test_simulate_price_paths_zero_volatility_collapses_to_drift_path():
+    rng = np.random.default_rng(42)
+    result = main.simulate_price_paths(
+        current_price=100.0, annual_drift=0.0, annual_volatility=0.0,
+        horizon_days=30, num_paths=500, rng=rng,
+    )
+    # Volatility is clipped to a small floor, not truly zero, but with no
+    # drift and near-zero vol the whole distribution should stay tight
+    # around the current price.
+    assert abs(result["median"] - 100.0) < 5.0
+    assert (result["high"] - result["low"]) < 15.0
+
+
+def test_simulate_price_paths_higher_volatility_widens_the_range():
+    rng_low = np.random.default_rng(1)
+    rng_high = np.random.default_rng(1)
+    low_vol = main.simulate_price_paths(
+        current_price=100.0, annual_drift=0.0, annual_volatility=0.1,
+        horizon_days=90, num_paths=2000, rng=rng_low,
+    )
+    high_vol = main.simulate_price_paths(
+        current_price=100.0, annual_drift=0.0, annual_volatility=0.8,
+        horizon_days=90, num_paths=2000, rng=rng_high,
+    )
+    assert (high_vol["high"] - high_vol["low"]) > (low_vol["high"] - low_vol["low"])
+
+
+# ---------------------------------------------------------------------------
+# Password validation
+# ---------------------------------------------------------------------------
+
+def test_password_too_short_rejected():
+    assert main.validate_password("ab1") is not None
+
+
+def test_password_over_bcrypt_limit_rejected():
+    assert main.validate_password("a1" + "x" * 71) is not None
+
+
+def test_password_without_digit_rejected():
+    assert main.validate_password("onlyletters") is not None
+
+
+def test_password_without_letter_rejected():
+    assert main.validate_password("1234567890") is not None
+
+
+def test_password_with_surrounding_whitespace_rejected():
+    assert main.validate_password(" secure123 ") is not None
+
+
+def test_valid_password_accepted():
+    assert main.validate_password("secure123") is None
+    assert main.validate_password("My Pass Phrase 42") is None
+
+
+# ---------------------------------------------------------------------------
 # Developer access code validation
 # ---------------------------------------------------------------------------
 

@@ -1402,6 +1402,13 @@ hr {
   opacity: 0.75;
 }
 
+.forgot-password-link {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
 .admin-tier-options {
   display: flex;
   flex-wrap: nowrap;

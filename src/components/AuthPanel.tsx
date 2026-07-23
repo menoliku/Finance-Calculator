@@ -3,6 +3,7 @@ import {
   authHeaders,
   getToken,
   notifyAuthChange,
+  onAuthChange,
   setToken as persistToken,
 } from "../auth";
 import { TIERS, TIER_LABELS, type Tier } from "../lib/tiers";
@@ -41,6 +42,14 @@ export default function AuthPanel() {
   const [devCodeError, setDevCodeError] = useState<string>("");
   const [isActivatingDev, setIsActivatingDev] = useState<boolean>(false);
 
+  const [showForgotHint, setShowForgotHint] = useState<boolean>(false);
+  const [showChangePassword, setShowChangePassword] = useState<boolean>(false);
+  const [currentPassword, setCurrentPassword] = useState<string>("");
+  const [newPassword, setNewPassword] = useState<string>("");
+  const [passwordMessage, setPasswordMessage] = useState<string>("");
+  const [passwordError, setPasswordError] = useState<string>("");
+  const [isChangingPassword, setIsChangingPassword] = useState<boolean>(false);
+
   useEffect(() => {
     let isCancelled = false;
 
@@ -76,8 +85,18 @@ export default function AuthPanel() {
 
     loadCurrentUser();
 
+    // Also refetch when something else changes auth-affecting state -- e.g.
+    // a developer granting this account a new tier from the Admin tab, which
+    // otherwise wouldn't be reflected in the menu until re-login.
+    const unsubscribe = onAuthChange(() => {
+      if (getToken()) {
+        loadCurrentUser();
+      }
+    });
+
     return () => {
       isCancelled = true;
+      unsubscribe();
     };
   }, [token]);
 
@@ -238,6 +257,43 @@ export default function AuthPanel() {
     }
   }
 
+  async function handleChangePassword(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (currentPassword === "" || newPassword === "") {
+      return;
+    }
+
+    try {
+      setIsChangingPassword(true);
+      setPasswordError("");
+      setPasswordMessage("");
+
+      const response = await fetch(`${API_BASE_URL}/auth/password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not change password.");
+      }
+
+      setCurrentPassword("");
+      setNewPassword("");
+      setShowChangePassword(false);
+      setPasswordMessage("Password updated.");
+    } catch (error) {
+      setPasswordError(
+        error instanceof Error ? error.message : "Could not change password."
+      );
+    } finally {
+      setIsChangingPassword(false);
+    }
+  }
+
   async function handleActivateDeveloper(e: React.FormEvent) {
     e.preventDefault();
 
@@ -318,6 +374,42 @@ export default function AuthPanel() {
               </p>
             )}
           </div>
+
+          {passwordMessage && <p className="helper-text">{passwordMessage}</p>}
+
+          {showChangePassword ? (
+            <form className="dev-code-form" onSubmit={handleChangePassword}>
+              <input
+                type="password"
+                placeholder="Current password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+              <input
+                type="password"
+                placeholder="New password (8+ chars, letter + number)"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                autoComplete="new-password"
+              />
+              <button type="submit" disabled={isChangingPassword}>
+                {isChangingPassword ? "..." : "Save"}
+              </button>
+              {passwordError && <p className="error-text">{passwordError}</p>}
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="auth-link-button sidebar-auth-button dev-code-link"
+              onClick={() => {
+                setShowChangePassword(true);
+                setPasswordMessage("");
+              }}
+            >
+              Change password
+            </button>
+          )}
 
           {user.role !== "developer" && (
             <>
@@ -442,6 +534,29 @@ export default function AuthPanel() {
                     mode === "login" ? "current-password" : "new-password"
                   }
                 />
+                {mode === "register" && (
+                  <p className="helper-text">
+                    At least 8 characters, with at least one letter and one number.
+                  </p>
+                )}
+                {mode === "login" && (
+                  <>
+                    <button
+                      type="button"
+                      className="auth-link-button forgot-password-link"
+                      onClick={() => setShowForgotHint((v) => !v)}
+                    >
+                      Forgot password?
+                    </button>
+                    {showForgotHint && (
+                      <p className="helper-text">
+                        Password reset by email is coming. During the beta, contact
+                        support/the developer and you&apos;ll receive a temporary
+                        password — then change it from the account menu.
+                      </p>
+                    )}
+                  </>
+                )}
               </div>
 
               {formError && <p className="error-text">{formError}</p>}

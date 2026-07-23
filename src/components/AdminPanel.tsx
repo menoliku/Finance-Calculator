@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { authFetch, getToken, onAuthChange } from "../auth";
+import { authFetch, getToken, notifyAuthChange, onAuthChange } from "../auth";
 import { TIERS, TIER_LABELS, type Tier } from "../lib/tiers";
 
 const API_BASE_URL =
@@ -19,6 +19,11 @@ export default function AdminPanel() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [updatingUserId, setUpdatingUserId] = useState<number | null>(null);
+  const [resetResult, setResetResult] = useState<{
+    userId: number;
+    username: string;
+    tempPassword: string;
+  } | null>(null);
 
   async function loadUsers() {
     if (!getToken()) {
@@ -83,9 +88,41 @@ export default function AdminPanel() {
           u.id === updated.id ? { ...u, subscriptionTier: updated.subscriptionTier } : u
         )
       );
+      // If the developer changed their own tier, the menu badge and any open
+      // tier-gated tabs should reflect it immediately.
+      notifyAuthChange();
     } catch (error) {
       console.error(error);
       setErrorMessage("Could not update that user's plan.");
+    } finally {
+      setUpdatingUserId(null);
+    }
+  }
+
+  async function handleResetPassword(userId: number) {
+    try {
+      setUpdatingUserId(userId);
+      setErrorMessage("");
+      setResetResult(null);
+
+      const response = await authFetch(
+        `${API_BASE_URL}/admin/users/${userId}/password-reset`,
+        { method: "POST" }
+      );
+
+      if (!response.ok) {
+        throw new Error("Could not reset that user's password.");
+      }
+
+      const data = await response.json();
+      setResetResult({
+        userId: data.id,
+        username: data.username,
+        tempPassword: data.tempPassword,
+      });
+    } catch (error) {
+      console.error(error);
+      setErrorMessage("Could not reset that user's password.");
     } finally {
       setUpdatingUserId(null);
     }
@@ -123,6 +160,15 @@ export default function AdminPanel() {
 
       {errorMessage && <p className="error-text">{errorMessage}</p>}
 
+      {resetResult && (
+        <div className="note-callout">
+          Temporary password for <strong>{resetResult.username}</strong>:{" "}
+          <code>{resetResult.tempPassword}</code> — copy it now, it won&apos;t be
+          shown again. Tell them to change it from the account menu after
+          signing in.
+        </div>
+      )}
+
       {isLoading ? (
         <p className="helper-text">Loading users...</p>
       ) : (
@@ -134,6 +180,7 @@ export default function AdminPanel() {
                 <th>Email</th>
                 <th>Role</th>
                 <th>Plan</th>
+                <th>Password</th>
               </tr>
             </thead>
             <tbody>
@@ -166,6 +213,16 @@ export default function AdminPanel() {
                         </button>
                       ))}
                     </div>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="tier-picker-option"
+                      onClick={() => handleResetPassword(u.id)}
+                      disabled={updatingUserId === u.id}
+                    >
+                      Reset
+                    </button>
                   </td>
                 </tr>
               ))}

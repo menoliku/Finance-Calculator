@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import secrets
+import numpy as np
 import pandas as pd
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -352,6 +353,30 @@ def require_developer(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
+def validate_password(password: str) -> str | None:
+    """Returns a beginner-friendly error message, or None when acceptable.
+    Deliberately modest rules -- length plus letter+digit -- because forcing
+    symbols/uppercase mostly produces 'Password1!' variants, not security."""
+    if password != password.strip():
+        return "Password cannot start or end with spaces."
+
+    if len(password) < 8:
+        return "Password must be at least 8 characters long."
+
+    # bcrypt silently truncates beyond 72 bytes -- reject rather than let a
+    # user think their 100-character passphrase is fully checked.
+    if len(password.encode("utf-8")) > 72:
+        return "Password must be 72 characters or fewer."
+
+    if not re.search(r"[A-Za-z]", password):
+        return "Password must contain at least one letter."
+
+    if not re.search(r"\d", password):
+        return "Password must contain at least one number."
+
+    return None
+
+
 def get_optional_user(
     token: str = Depends(oauth2_scheme_optional),
     db: Session = Depends(get_db)
@@ -465,6 +490,10 @@ def register_user(request: Request, payload: RegisterRequest, db: Session = Depe
             status_code=400,
             detail="Username already taken"
         )
+
+    password_error = validate_password(payload.password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
 
     new_user = User(
         username=payload.username,
@@ -604,6 +633,72 @@ def activate_developer(
     logger.info("Developer role activated for user id=%s (%s)", current_user.id, current_user.username)
 
     return user_payload(current_user)
+
+
+class ChangePasswordRequest(BaseModel):
+    currentPassword: str
+    newPassword: str
+
+
+@app.post("/auth/password")
+@limiter.limit("5/minute")  # slows brute-forcing a session-holder's password
+def change_password(
+    request: Request,
+    payload: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not pwd_context.verify(payload.currentPassword, current_user.hashed_password):
+        raise HTTPException(status_code=403, detail="Current password is incorrect")
+
+    password_error = validate_password(payload.newPassword)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
+
+    current_user.hashed_password = hash_password(payload.newPassword)
+    db.commit()
+
+    return {"message": "Password updated"}
+
+
+@app.post("/admin/users/{user_id}/password-reset")
+@limiter.limit("10/minute")
+def admin_reset_password(
+    request: Request,
+    user_id: int,
+    current_user: User = Depends(require_developer),
+    db: Session = Depends(get_db)
+):
+    """Beta substitute for email-based password reset: the developer generates
+    a temporary password and hands it to the user out-of-band. The plaintext
+    is returned exactly once and never logged or stored."""
+    target = db.query(User).filter(User.id == user_id).first()
+
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # token_urlsafe can occasionally produce a string without a digit or
+    # letter; regenerate until it passes our own rules (practically 1 try).
+    for _ in range(5):
+        temp_password = secrets.token_urlsafe(9)
+        if validate_password(temp_password) is None:
+            break
+    else:
+        temp_password = f"{secrets.token_urlsafe(6)}a1"
+
+    target.hashed_password = hash_password(temp_password)
+    db.commit()
+
+    logger.info(
+        "Developer id=%s reset the password for user id=%s (%s)",
+        current_user.id, target.id, target.username,
+    )
+
+    return {
+        "id": target.id,
+        "username": target.username,
+        "tempPassword": temp_password,
+    }
 
 
 @app.get("/admin/users")
@@ -1977,9 +2072,11 @@ def get_stock_analysis(request: Request, symbol: str = Query(""), current_user=D
     symbol = symbol.strip().upper()
 
     # The chart is a Plus unlock (organizing/history); the analyst gauge and
-    # news sentiment are Pro unlocks (analysis).
+    # news sentiment are Pro unlocks (analysis); the statistical price
+    # projection is an Ultimate unlock (advanced analytics/coaching).
     has_plus = has_tier(current_user, "plus")
     has_pro = has_tier(current_user, "pro")
+    has_ultimate = has_tier(current_user, "ultimate")
 
     if symbol == "":
         return {"error": "No symbol provided"}
@@ -2107,6 +2204,7 @@ def get_stock_analysis(request: Request, symbol: str = Query(""), current_user=D
                 "priceHistory": has_plus,
                 "analystConsensus": has_pro,
                 "newsSentiment": has_pro,
+                "priceProjection": has_ultimate,
             },
             "disclaimer": "Educational information only, not financial advice.",
         }
@@ -2768,4 +2866,324 @@ def recommend_stocks(request: Request, payload: RecommendationRequest, current_u
 
     except Exception as e:
         return log_and_generic_error(e, "Failed to generate recommendations.", "recommend_stocks")
+
+
+# ---------------------------------------------------------------------------
+# Statistical price projection (Ultimate tier): a Monte Carlo range driven by
+# the stock's own historical volatility, with the drift nudged (within a
+# small, capped amount) by transparent technical/news/fundamental/analyst
+# signals. This deliberately never outputs a single predicted price -- short
+# term stock prices are close to a random walk, and a point prediction would
+# both be wrong most of the time and read as financial advice despite the
+# disclaimers. Every input that shapes the range is returned in the response
+# so the projection is explainable, not a black box.
+# ---------------------------------------------------------------------------
+
+def compute_historical_stats(daily_closes: list) -> dict:
+    """Annualized drift and volatility from a series of daily closing prices.
+    Historical mean return is a notoriously noisy estimator of future drift,
+    so it is shrunk 50% toward zero -- disclosed in the response, not hidden.
+    Needs at least 2 closes; fewer returns zeros (caller should treat that as
+    "insufficient data" upstream)."""
+    if len(daily_closes) < 2:
+        return {"annualDrift": 0.0, "annualVolatility": 0.0, "rawAnnualDrift": 0.0}
+
+    closes = np.array(daily_closes, dtype=float)
+    closes = closes[closes > 0]  # guard against bad/zero data points
+
+    if len(closes) < 2:
+        return {"annualDrift": 0.0, "annualVolatility": 0.0, "rawAnnualDrift": 0.0}
+
+    log_returns = np.diff(np.log(closes))
+
+    raw_annual_drift = float(np.mean(log_returns) * 252)
+    annual_volatility = float(np.std(log_returns) * np.sqrt(252))
+
+    DRIFT_SHRINKAGE = 0.5
+    shrunk_drift = raw_annual_drift * DRIFT_SHRINKAGE
+
+    return {
+        "annualDrift": shrunk_drift,
+        "annualVolatility": annual_volatility,
+        "rawAnnualDrift": raw_annual_drift,
+    }
+
+
+def compute_rsi(closes: list, period: int = 14):
+    """Standard 14-day Relative Strength Index. Returns None when there isn't
+    enough history to compute it rather than guessing."""
+    if len(closes) < period + 1:
+        return None
+
+    closes = np.array(closes, dtype=float)
+    deltas = np.diff(closes)
+
+    gains = np.where(deltas > 0, deltas, 0.0)
+    losses = np.where(deltas < 0, -deltas, 0.0)
+
+    avg_gain = np.mean(gains[-period:])
+    avg_loss = np.mean(losses[-period:])
+
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+
+    rs = avg_gain / avg_loss
+    return float(100 - (100 / (1 + rs)))
+
+
+def _clip_signal(value: float) -> float:
+    return max(-1.0, min(1.0, value))
+
+
+def momentum_signal(current_price, sma50, sma200) -> float:
+    """+1 when price is above both moving averages with the shorter one
+    leading (uptrend), -1 for the mirrored downtrend, shades between."""
+    if current_price is None or sma50 is None or sma200 is None or sma200 == 0:
+        return 0.0
+
+    above_50 = 1 if current_price > sma50 else -1
+    above_200 = 1 if current_price > sma200 else -1
+    trend_aligned = 1 if sma50 > sma200 else -1
+
+    return _clip_signal((above_50 + above_200 + trend_aligned) / 3)
+
+
+def rsi_signal(rsi) -> float:
+    """Mean-reversion nudge: extreme readings lean slightly AGAINST further
+    movement in that direction, not with it -- an overbought stock is more
+    likely to cool off than keep accelerating."""
+    if rsi is None:
+        return 0.0
+
+    if rsi >= 70:
+        return _clip_signal(-(rsi - 70) / 30)
+
+    if rsi <= 30:
+        return _clip_signal((30 - rsi) / 30)
+
+    return 0.0
+
+
+def sentiment_signal(average_compound_score) -> float:
+    if average_compound_score is None:
+        return 0.0
+
+    return _clip_signal(average_compound_score)
+
+
+def analyst_signal(recommendation_mean) -> float:
+    """recommendationMean: 1=strong buy ... 5=strong sell -- rescaled so
+    strong buy -> +1, hold (3) -> 0, strong sell -> -1."""
+    if recommendation_mean is None:
+        return 0.0
+
+    return _clip_signal((3 - recommendation_mean) / 2)
+
+
+def fundamentals_signal(revenue_growth) -> float:
+    """tanh-compressed so an extreme outlier (e.g. 300% growth off a tiny
+    base) can't dominate the composite score the way a raw value would."""
+    if revenue_growth is None:
+        return 0.0
+
+    return _clip_signal(float(np.tanh(revenue_growth * 2)))
+
+
+# Trend and sentiment are weighted heaviest -- they're the most directly
+# forward-looking of the five; fundamentals momentum is a slower-moving
+# backdrop and gets the least weight.
+SIGNAL_WEIGHTS = {
+    "momentum": 0.30,
+    "sentiment": 0.25,
+    "analyst": 0.20,
+    "rsi": 0.15,
+    "fundamentals": 0.10,
+}
+
+
+def compute_composite_score(signals: dict) -> float:
+    total = sum(signals[key] * weight for key, weight in SIGNAL_WEIGHTS.items())
+    return _clip_signal(total)
+
+
+# The tilt is deliberately small -- the tool should nudge the range, never
+# imply strong conviction about direction.
+MAX_ANNUAL_DRIFT_TILT = 0.05
+DRIFT_CLIP_BOUND = 0.30
+MIN_ANNUAL_VOLATILITY = 0.05
+MAX_ANNUAL_VOLATILITY = 2.0
+
+
+def simulate_price_paths(
+    current_price: float,
+    annual_drift: float,
+    annual_volatility: float,
+    horizon_days: int,
+    num_paths: int = 2000,
+    rng=None,
+) -> dict:
+    """Vectorized geometric Brownian motion Monte Carlo. `rng` is an injectable
+    numpy Generator so tests can seed it for deterministic assertions; a real
+    request gets a fresh one."""
+    if rng is None:
+        rng = np.random.default_rng()
+
+    annual_volatility = max(MIN_ANNUAL_VOLATILITY, min(MAX_ANNUAL_VOLATILITY, annual_volatility))
+    annual_drift = max(-DRIFT_CLIP_BOUND, min(DRIFT_CLIP_BOUND, annual_drift))
+
+    daily_drift = annual_drift / 252
+    daily_vol = annual_volatility / np.sqrt(252)
+
+    daily_shocks = rng.normal(
+        loc=(daily_drift - 0.5 * daily_vol ** 2),
+        scale=daily_vol,
+        size=(num_paths, horizon_days),
+    )
+
+    cumulative_log_return = np.sum(daily_shocks, axis=1)
+    final_prices = current_price * np.exp(cumulative_log_return)
+
+    percentiles = np.percentile(final_prices, [5, 16, 50, 84, 95])
+
+    return {
+        "extremeLow": float(percentiles[0]),
+        "low": float(percentiles[1]),
+        "median": float(percentiles[2]),
+        "high": float(percentiles[3]),
+        "extremeHigh": float(percentiles[4]),
+    }
+
+
+PROJECTION_HORIZONS = {30, 90, 365}
+
+
+@app.get("/stocks/price-projection")
+@limiter.limit("20/minute")
+def get_price_projection(
+    request: Request,
+    symbol: str = Query(""),
+    horizonDays: int = Query(30),
+    current_user: User = Depends(get_current_user),
+):
+    if not has_tier(current_user, "ultimate"):
+        raise HTTPException(
+            status_code=403,
+            detail="Statistical price projections are an Ultimate feature. Upgrade to Ultimate to unlock this."
+        )
+
+    symbol = symbol.strip().upper()
+
+    if symbol == "":
+        return {"error": "No symbol provided"}
+
+    if horizonDays not in PROJECTION_HORIZONS:
+        raise HTTPException(status_code=400, detail="horizonDays must be one of 30, 90, or 365")
+
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+
+        if current_price is None:
+            return {"error": "Could not find a current price for that symbol"}
+
+        history = ticker.history(period="1y", interval="1d")
+        closes = history["Close"].dropna().tolist()
+
+        if len(closes) < 30:
+            return {"error": "Not enough price history for that symbol to build a projection"}
+
+        stats = compute_historical_stats(closes)
+
+        closes_array = np.array(closes)
+        sma50 = float(np.mean(closes_array[-50:])) if len(closes_array) >= 50 else None
+        sma200 = float(np.mean(closes_array[-200:])) if len(closes_array) >= 200 else None
+        rsi = compute_rsi(closes)
+
+        news_scores = []
+        try:
+            for item in (ticker.news or [])[:10]:
+                news_item = _extract_news_item(item)
+                if news_item and news_item["sentimentScore"] is not None:
+                    news_scores.append(news_item["sentimentScore"])
+        except Exception:
+            news_scores = []
+
+        avg_sentiment = float(np.mean(news_scores)) if news_scores else None
+        recommendation_mean = info.get("recommendationMean")
+        revenue_growth = info.get("revenueGrowth")
+
+        signals = {
+            "momentum": momentum_signal(current_price, sma50, sma200),
+            "rsi": rsi_signal(rsi),
+            "sentiment": sentiment_signal(avg_sentiment),
+            "analyst": analyst_signal(recommendation_mean),
+            "fundamentals": fundamentals_signal(revenue_growth),
+        }
+
+        composite_score = compute_composite_score(signals)
+        signal_tilt = composite_score * MAX_ANNUAL_DRIFT_TILT
+        adjusted_drift = stats["annualDrift"] + signal_tilt
+
+        projection = simulate_price_paths(
+            current_price=current_price,
+            annual_drift=adjusted_drift,
+            annual_volatility=stats["annualVolatility"],
+            horizon_days=horizonDays,
+        )
+
+        def factor_note(name, reading, description):
+            return {"name": name, "reading": reading, "note": description}
+
+        factors = [
+            factor_note(
+                "Trend",
+                "Uptrend" if signals["momentum"] > 0.2 else "Downtrend" if signals["momentum"] < -0.2 else "Neutral",
+                "Price relative to its 50-day and 200-day moving averages.",
+            ),
+            factor_note(
+                "Momentum (RSI)",
+                f"{round(rsi, 1)}" if rsi is not None else "N/A",
+                "14-day Relative Strength Index. Above 70 is often considered overbought, below 30 oversold.",
+            ),
+            factor_note(
+                "News Sentiment",
+                "Positive" if signals["sentiment"] > 0.1 else "Negative" if signals["sentiment"] < -0.1 else "Neutral",
+                "Average tone of recent headlines about this company.",
+            ),
+            factor_note(
+                "Analyst Consensus",
+                _recommendation_phrase(info.get("recommendationKey")),
+                "Current average analyst rating.",
+            ),
+            factor_note(
+                "Revenue Growth",
+                f"{round(revenue_growth * 100, 1)}%" if revenue_growth is not None else "N/A",
+                "Year-over-year revenue growth trend.",
+            ),
+        ]
+
+        return {
+            "symbol": symbol,
+            "name": info.get("shortName") or info.get("longName") or symbol,
+            "currentPrice": round(current_price, 2),
+            "horizonDays": horizonDays,
+            "projection": {key: round(value, 2) for key, value in projection.items()},
+            "methodology": {
+                "annualVolatility": round(stats["annualVolatility"], 4),
+                "baselineDrift": round(stats["annualDrift"], 4),
+                "signalTilt": round(signal_tilt, 4),
+                "compositeScore": round(composite_score, 3),
+                "factors": factors,
+            },
+            "disclaimer": (
+                "This is a statistical range derived from this stock's historical volatility "
+                "and current technical/news signals -- it is not a forecast. Actual prices can "
+                "and do fall outside this range. Educational information only, not financial advice."
+            ),
+        }
+
+    except Exception as e:
+        return log_and_generic_error(e, "Failed to build price projection.", "get_price_projection")
 

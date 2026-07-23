@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import AnalystGauge from "./AnalystGauge";
 import PriceChart from "./PriceChart";
+import PriceProjectionCard from "./PriceProjectionCard";
 import { authHeaders, getToken, onAuthChange } from "../auth";
 
 const API_BASE_URL =
@@ -48,6 +49,7 @@ type AnalysisUnlocks = {
   priceHistory: boolean;
   analystConsensus: boolean;
   newsSentiment: boolean;
+  priceProjection: boolean;
 };
 
 type StockAnalysisData = {
@@ -310,6 +312,21 @@ export default function StockAnalysis({ symbol }: StockAnalysisProps) {
           <div className="locked-feature">
             <p>Analyst buy/hold/sell consensus is a Pro feature.</p>
             <span className="tier-badge tier-badge-pro">Pro</span>
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h3>Statistical Price Outlook</h3>
+        {unlocks.priceProjection ? (
+          <PriceProjectionCard symbol={data.symbol} />
+        ) : (
+          <div className="locked-feature">
+            <p>
+              A statistical price range based on volatility, trend, and news
+              signals is an Ultimate feature.
+            </p>
+            <span className="tier-badge tier-badge-ultimate">Ultimate</span>
           </div>
         )}
       </div>
