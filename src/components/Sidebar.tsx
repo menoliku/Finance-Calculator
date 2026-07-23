@@ -20,6 +20,7 @@ const NAV_ITEMS: { key: TabKey; label: string }[] = [
   { key: "recommendations", label: "Recommendations" },
   { key: "watchlist", label: "Watchlist" },
   { key: "compare", label: "Compare" },
+  { key: "strategy", label: "Strategy" },
 ];
 
 export default function Sidebar({ activeTab, onSelectTab }: SidebarProps) {

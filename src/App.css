@@ -1954,6 +1954,33 @@ hr {
   color: #aeb9d2;
 }
 
+.strategy-attempt-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.strategy-attempt-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px 0;
+}
+
+.strategy-toggle-trades {
+  width: auto;
+  align-self: flex-start;
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 0.82rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
 .tools-subnav {
   display: flex;
   gap: 8px;

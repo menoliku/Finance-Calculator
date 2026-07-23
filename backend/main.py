@@ -2909,26 +2909,109 @@ def compute_historical_stats(daily_closes: list) -> dict:
     }
 
 
-def compute_rsi(closes: list, period: int = 14):
-    """Standard 14-day Relative Strength Index. Returns None when there isn't
-    enough history to compute it rather than guessing."""
-    if len(closes) < period + 1:
-        return None
+def compute_rsi_series(closes: list, period: int = 14) -> list:
+    """Rolling Relative Strength Index -- one value per day, None until there's
+    enough history. The single most-recent value (compute_rsi below) is just
+    the last entry of this, kept as one implementation rather than two."""
+    n = len(closes)
+    result = [None] * n
 
-    closes = np.array(closes, dtype=float)
-    deltas = np.diff(closes)
+    if n < period + 1:
+        return result
 
+    closes_arr = np.array(closes, dtype=float)
+    deltas = np.diff(closes_arr)
     gains = np.where(deltas > 0, deltas, 0.0)
     losses = np.where(deltas < 0, -deltas, 0.0)
 
-    avg_gain = np.mean(gains[-period:])
-    avg_loss = np.mean(losses[-period:])
+    for i in range(period, n):
+        avg_gain = np.mean(gains[i - period:i])
+        avg_loss = np.mean(losses[i - period:i])
 
-    if avg_loss == 0:
-        return 100.0 if avg_gain > 0 else 50.0
+        if avg_loss == 0:
+            result[i] = 100.0 if avg_gain > 0 else 50.0
+        else:
+            rs = avg_gain / avg_loss
+            result[i] = float(100 - (100 / (1 + rs)))
 
-    rs = avg_gain / avg_loss
-    return float(100 - (100 / (1 + rs)))
+    return result
+
+
+def compute_rsi(closes: list, period: int = 14):
+    """Standard 14-day Relative Strength Index for the most recent day. Returns
+    None when there isn't enough history to compute it rather than guessing."""
+    series = compute_rsi_series(closes, period)
+    return series[-1] if series else None
+
+
+def compute_ema_series(closes: list, period: int) -> list:
+    """Standard exponential moving average. None until there's enough history;
+    the first real value is seeded with the simple average of the first
+    `period` closes (the conventional EMA start), then smoothed forward."""
+    n = len(closes)
+    result = [None] * n
+
+    if n < period:
+        return result
+
+    closes_arr = np.array(closes, dtype=float)
+    alpha = 2 / (period + 1)
+
+    seed = float(np.mean(closes_arr[:period]))
+    result[period - 1] = seed
+
+    previous = seed
+    for i in range(period, n):
+        previous = closes_arr[i] * alpha + previous * (1 - alpha)
+        result[i] = float(previous)
+
+    return result
+
+
+def compute_sma_series(closes: list, period: int) -> list:
+    """Rolling simple moving average. None until there's enough history."""
+    n = len(closes)
+    result = [None] * n
+
+    if n < period:
+        return result
+
+    closes_arr = np.array(closes, dtype=float)
+    for i in range(period - 1, n):
+        result[i] = float(np.mean(closes_arr[i - period + 1:i + 1]))
+
+    return result
+
+
+def compute_macd_series(closes: list) -> dict:
+    """MACD line (EMA12 - EMA26), its signal line (EMA9 of the MACD line),
+    and the histogram (MACD - signal) -- the standard 12/26/9 configuration."""
+    ema12 = compute_ema_series(closes, 12)
+    ema26 = compute_ema_series(closes, 26)
+
+    macd_line = [
+        (a - b) if a is not None and b is not None else None
+        for a, b in zip(ema12, ema26)
+    ]
+
+    # The signal line is an EMA of the MACD line itself, computed only over
+    # the stretch where MACD has real values (reusing compute_ema_series
+    # rather than a second smoothing implementation).
+    first_valid = next((i for i, v in enumerate(macd_line) if v is not None), None)
+
+    if first_valid is None:
+        signal_line = [None] * len(closes)
+    else:
+        valid_macd = [v for v in macd_line[first_valid:]]
+        signal_tail = compute_ema_series(valid_macd, 9)
+        signal_line = [None] * first_valid + signal_tail
+
+    histogram = [
+        (m - s) if m is not None and s is not None else None
+        for m, s in zip(macd_line, signal_line)
+    ]
+
+    return {"macd": macd_line, "signal": signal_line, "histogram": histogram}
 
 
 def _clip_signal(value: float) -> float:
@@ -3232,4 +3315,329 @@ def get_price_projection(
 
     except Exception as e:
         return log_and_generic_error(e, "Failed to build price projection.", "get_price_projection")
+
+
+# ---------------------------------------------------------------------------
+# Strategy backtester (Pro tier): tests a MACD-based trading rule -- and two
+# progressively more refined versions of it -- against real historical
+# prices. This deliberately does NOT search for a "loss-proof" formula: no
+# rule-based strategy wins every trade on real market data, and one that
+# appeared to would almost certainly be overfit to that specific historical
+# window rather than actually predictive. Instead it runs three named,
+# honest attempts and reports exactly how each performed, including against
+# simply buying and holding.
+# ---------------------------------------------------------------------------
+
+def generate_trading_signals(
+    closes: list,
+    use_trend_filter: bool = False,
+    use_rsi_filter: bool = False,
+    use_histogram_confirmation: bool = False,
+) -> list:
+    """Base rule: buy when the MACD line crosses above its signal line, sell
+    on the reverse cross -- a faster, more responsive relative of the classic
+    golden/death cross (which uses two slow SMAs). The three optional filters
+    layer on refinements without duplicating the crossover logic three times:
+
+    - use_trend_filter: only take buy signals while price is above its own
+      200-day average, so the strategy isn't buying against the primary trend.
+    - use_rsi_filter: skip buys when RSI >= 70 (don't chase an extended move)
+      and skip sells when RSI <= 30 (don't sell into an oversold bottom).
+    - use_histogram_confirmation: require the MACD histogram to have been
+      rising for the 2 prior days before honoring a buy cross -- filters out
+      single-day noise crosses that reverse immediately.
+    """
+    n = len(closes)
+    signals = [None] * n
+
+    if n < 30:
+        return signals
+
+    macd_data = compute_macd_series(closes)
+    macd_line = macd_data["macd"]
+    signal_line = macd_data["signal"]
+    histogram = macd_data["histogram"]
+
+    sma200 = compute_sma_series(closes, 200) if use_trend_filter else [None] * n
+    rsi = compute_rsi_series(closes, 14) if use_rsi_filter else [None] * n
+
+    for i in range(1, n):
+        prev_macd, prev_signal = macd_line[i - 1], signal_line[i - 1]
+        curr_macd, curr_signal = macd_line[i], signal_line[i]
+
+        if None in (prev_macd, prev_signal, curr_macd, curr_signal):
+            continue
+
+        crossed_up = prev_macd <= prev_signal and curr_macd > curr_signal
+        crossed_down = prev_macd >= prev_signal and curr_macd < curr_signal
+
+        if crossed_up:
+            if use_trend_filter and (sma200[i] is None or closes[i] < sma200[i]):
+                continue
+
+            if use_rsi_filter and rsi[i] is not None and rsi[i] >= 70:
+                continue
+
+            if use_histogram_confirmation:
+                if i < 2 or None in (histogram[i], histogram[i - 1], histogram[i - 2]):
+                    continue
+                if not (histogram[i] > histogram[i - 1] > histogram[i - 2]):
+                    continue
+
+            signals[i] = "buy"
+
+        elif crossed_down:
+            if use_rsi_filter and rsi[i] is not None and rsi[i] <= 30:
+                continue
+
+            signals[i] = "sell"
+
+    return signals
+
+
+def run_strategy_backtest(dates: list, closes: list, signals: list) -> dict:
+    """Simulates a single all-in/all-out position: buy the full stake on a
+    "buy" signal while flat, sell everything on a "sell" signal while
+    holding. Ignores buy signals while already holding and sell signals
+    while flat (a signal only matters when it can actually be acted on).
+
+    A position still open at the end of the series is closed at the final
+    price and flagged stillOpen -- reported transparently rather than
+    silently dropped from the trade list."""
+    trades = []
+    equity_curve = []
+
+    starting_equity = 100.0
+    equity = starting_equity
+    position_shares = None
+    entry_price = None
+    entry_date = None
+
+    for i in range(len(closes)):
+        price = closes[i]
+        signal = signals[i]
+
+        if signal == "buy" and position_shares is None:
+            position_shares = equity / price
+            entry_price = price
+            entry_date = dates[i]
+        elif signal == "sell" and position_shares is not None:
+            exit_price = price
+            equity = position_shares * exit_price
+            return_percent = (exit_price - entry_price) / entry_price * 100
+
+            trades.append({
+                "entryDate": entry_date,
+                "entryPrice": round(entry_price, 2),
+                "exitDate": dates[i],
+                "exitPrice": round(exit_price, 2),
+                "returnPercent": round(return_percent, 2),
+                "isWin": exit_price > entry_price,
+                "stillOpen": False,
+            })
+
+            position_shares = None
+            entry_price = None
+            entry_date = None
+
+        current_equity = position_shares * price if position_shares is not None else equity
+        equity_curve.append({"date": dates[i], "equity": round(current_equity, 4)})
+
+    # Close out a still-open position at the final price so metrics are
+    # complete, but mark it so the user knows it wasn't a real exit signal.
+    if position_shares is not None:
+        exit_price = closes[-1]
+        equity = position_shares * exit_price
+        return_percent = (exit_price - entry_price) / entry_price * 100
+
+        trades.append({
+            "entryDate": entry_date,
+            "entryPrice": round(entry_price, 2),
+            "exitDate": dates[-1],
+            "exitPrice": round(exit_price, 2),
+            "returnPercent": round(return_percent, 2),
+            "isWin": exit_price > entry_price,
+            "stillOpen": True,
+        })
+
+    total_trades = len(trades)
+    wins = sum(1 for t in trades if t["isWin"])
+    win_rate = round(wins / total_trades * 100, 1) if total_trades > 0 else 0.0
+    total_return_percent = round((equity - starting_equity) / starting_equity * 100, 2)
+
+    peak = starting_equity
+    max_drawdown = 0.0
+    for point in equity_curve:
+        peak = max(peak, point["equity"])
+        drawdown = (peak - point["equity"]) / peak * 100
+        max_drawdown = max(max_drawdown, drawdown)
+
+    return {
+        "trades": trades,
+        "totalTrades": total_trades,
+        "winRate": win_rate,
+        "totalReturnPercent": total_return_percent,
+        "maxDrawdownPercent": round(max_drawdown, 2),
+        "equityCurve": equity_curve,
+    }
+
+
+STRATEGY_ATTEMPTS = [
+    {
+        "name": "Plain MACD Crossover",
+        "description": "Buys when the MACD line crosses above its signal line, sells on the reverse cross -- a faster relative of the classic golden/death cross.",
+        "useTrendFilter": False,
+        "useRsiFilter": False,
+        "useHistogramConfirmation": False,
+    },
+    {
+        "name": "MACD + Trend Filter",
+        "description": "Same crossover, but buys are skipped unless the price is above its 200-day average, so the strategy stops fighting the primary trend.",
+        "useTrendFilter": True,
+        "useRsiFilter": False,
+        "useHistogramConfirmation": False,
+    },
+    {
+        "name": "MACD + Trend + RSI + Histogram Confirmation",
+        "description": "Adds an RSI filter (skips buys when already overbought, skips sells when oversold) and requires 2 days of rising momentum before honoring a buy -- cuts down on single-day noise crosses.",
+        "useTrendFilter": True,
+        "useRsiFilter": True,
+        "useHistogramConfirmation": True,
+    },
+]
+
+MIN_TRADES_FOR_RELIABLE_RESULT = 5
+MIN_TRADES_TO_BE_CONSIDERED_BEST = 3
+STRATEGY_BACKTEST_MAX_CHART_POINTS = 180
+
+
+def _downsample_equity_curve(equity_curve: list) -> list:
+    if len(equity_curve) <= STRATEGY_BACKTEST_MAX_CHART_POINTS:
+        return equity_curve
+
+    step = len(equity_curve) / STRATEGY_BACKTEST_MAX_CHART_POINTS
+    sampled = [equity_curve[int(i * step)] for i in range(STRATEGY_BACKTEST_MAX_CHART_POINTS)]
+    sampled[-1] = equity_curve[-1]
+    return sampled
+
+
+class StrategyBacktestRequest(BaseModel):
+    symbol: str
+
+
+@app.post("/stocks/strategy-backtest")
+@limiter.limit("10/minute")
+def strategy_backtest(
+    request: Request,
+    payload: StrategyBacktestRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_tier(current_user, "pro"):
+        raise HTTPException(
+            status_code=403,
+            detail="The strategy backtester is a Pro feature. Upgrade to Pro to unlock this."
+        )
+
+    symbol = payload.symbol.strip().upper()
+
+    if symbol == "":
+        return {"error": "No symbol provided"}
+
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+
+        history = ticker.history(period="5y", interval="1d", auto_adjust=False)
+
+        if history.empty:
+            return {"error": "No historical price data found for that symbol"}
+
+        prices = history["Close"].dropna()
+        prices.index = pd.to_datetime(prices.index).tz_localize(None).normalize()
+        prices = prices[~prices.index.duplicated(keep="last")]
+
+        dates = [d.date().isoformat() for d in prices.index]
+        closes = [float(c) for c in prices.tolist()]
+
+        if len(closes) < 300:
+            return {
+                "error": "Not enough price history for that symbol to run a reliable backtest (need at least ~1 year of daily data)."
+            }
+
+        buy_and_hold_return = round((closes[-1] - closes[0]) / closes[0] * 100, 2)
+
+        attempts_response = []
+        for config in STRATEGY_ATTEMPTS:
+            signals = generate_trading_signals(
+                closes,
+                use_trend_filter=config["useTrendFilter"],
+                use_rsi_filter=config["useRsiFilter"],
+                use_histogram_confirmation=config["useHistogramConfirmation"],
+            )
+            result = run_strategy_backtest(dates, closes, signals)
+
+            attempts_response.append({
+                "name": config["name"],
+                "description": config["description"],
+                "totalTrades": result["totalTrades"],
+                "winRate": result["winRate"],
+                "totalReturnPercent": result["totalReturnPercent"],
+                "maxDrawdownPercent": result["maxDrawdownPercent"],
+                "trades": result["trades"],
+                "equityCurve": _downsample_equity_curve(result["equityCurve"]),
+            })
+
+        # "Best" is picked by total return among attempts with enough trades
+        # to mean something -- win rate alone rewards a single lucky trade.
+        eligible = [
+            (i, a) for i, a in enumerate(attempts_response)
+            if a["totalTrades"] >= MIN_TRADES_TO_BE_CONSIDERED_BEST
+        ]
+        candidates = eligible if eligible else list(enumerate(attempts_response))
+        best_index = max(candidates, key=lambda pair: pair[1]["totalReturnPercent"])[0]
+        best = attempts_response[best_index]
+
+        low_sample_warning = best["totalTrades"] < MIN_TRADES_FOR_RELIABLE_RESULT
+        reached_perfect_win_rate = best["winRate"] == 100.0 and not low_sample_warning
+
+        if reached_perfect_win_rate:
+            difficulty_explanation = (
+                f'"{best["name"]}" won all {best["totalTrades"]} of its trades over this backtest period. '
+                "Treat this cautiously: a historical window this size can still be a lucky stretch, and a rule "
+                "that looks loss-proof on past data is not guaranteed to keep winning on data it hasn't seen -- "
+                "including live trading going forward."
+            )
+        else:
+            attempt_summaries = "; ".join(
+                f'{a["name"]}: {a["winRate"]}% win rate over {a["totalTrades"]} trades ({a["totalReturnPercent"]:+.1f}% total return)'
+                for a in attempts_response
+            )
+            difficulty_explanation = (
+                "None of the 3 attempts won every trade, and that's expected: real markets contain genuine "
+                "randomness, so no rule-based formula wins 100% of the time on real historical data. A formula "
+                "that did appear loss-proof on one specific window would most likely be overfit to that window's "
+                f"noise rather than actually predictive. Results -- {attempt_summaries}. Buy-and-hold over the "
+                f"same period returned {buy_and_hold_return:+.1f}%."
+            )
+
+        return {
+            "symbol": symbol,
+            "name": info.get("shortName") or info.get("longName") or symbol,
+            "periodStart": dates[0],
+            "periodEnd": dates[-1],
+            "buyAndHoldReturnPercent": buy_and_hold_return,
+            "attempts": attempts_response,
+            "bestAttemptIndex": best_index,
+            "reachedPerfectWinRate": reached_perfect_win_rate,
+            "lowSampleWarning": low_sample_warning,
+            "difficultyExplanation": difficulty_explanation,
+            "disclaimer": (
+                "This backtest shows how a rule would have performed on past prices -- it is not a prediction "
+                "and past performance does not guarantee future results. Educational information only, not "
+                "financial advice or a signal to trade on."
+            ),
+        }
+
+    except Exception as e:
+        return log_and_generic_error(e, "Failed to run strategy backtest.", "strategy_backtest")
 

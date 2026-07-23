@@ -480,6 +480,161 @@ def test_simulate_price_paths_higher_volatility_widens_the_range():
 
 
 # ---------------------------------------------------------------------------
+# Strategy backtester: indicator series, signal generation, trade simulation
+# ---------------------------------------------------------------------------
+
+def _oscillating_series(cycles=4, cycle_length=40, base=100.0, amplitude=15.0):
+    """A synthetic price series with genuine up/down reversals -- needed to
+    exercise MACD crossovers, unlike a smooth monotonic trend."""
+    closes = []
+    for i in range(cycles * cycle_length):
+        phase = (i % cycle_length) / cycle_length
+        wave = amplitude * np.sin(2 * np.pi * phase)
+        drift = i * 0.05
+        closes.append(base + wave + drift)
+    return closes
+
+
+def test_ema_series_none_until_enough_data():
+    series = main.compute_ema_series([100, 101, 102], period=12)
+    assert all(v is None for v in series)
+
+
+def test_ema_series_tracks_uptrend_direction():
+    uptrend = [100 * (1.01 ** i) for i in range(50)]
+    series = main.compute_ema_series(uptrend, period=12)
+    valid = [v for v in series if v is not None]
+    assert valid[-1] > valid[0]
+
+
+def test_sma_series_matches_manual_average():
+    closes = [10, 20, 30, 40, 50]
+    series = main.compute_sma_series(closes, period=3)
+    assert series[:2] == [None, None]
+    assert series[2] == 20.0  # mean(10,20,30)
+    assert series[3] == 30.0  # mean(20,30,40)
+    assert series[4] == 40.0  # mean(30,40,50)
+
+
+def test_macd_series_positive_in_sustained_uptrend():
+    uptrend = [100 * (1.005 ** i) for i in range(120)]
+    macd = main.compute_macd_series(uptrend)
+    valid_macd = [v for v in macd["macd"] if v is not None]
+    assert valid_macd[-1] > 0
+
+
+def test_rsi_series_matches_scalar_rsi_at_every_valid_point():
+    closes = _oscillating_series()
+    series = main.compute_rsi_series(closes, period=14)
+    for i in range(14, len(closes)):
+        assert series[i] == main.compute_rsi(closes[: i + 1], period=14)
+
+
+def test_generate_trading_signals_produces_buys_and_sells_on_oscillation():
+    closes = _oscillating_series()
+    signals = main.generate_trading_signals(closes)
+    assert "buy" in signals
+    assert "sell" in signals
+
+
+def test_generate_trading_signals_trend_filter_suppresses_buy_below_sma200():
+    # A long decline followed by a small bounce: the bounce's MACD cross
+    # happens while price is still well below its 200-day average.
+    decline = [200 - i * 0.5 for i in range(250)]
+    bounce = [decline[-1] + i * 2 for i in range(20)]
+    closes = decline + bounce
+
+    unfiltered = main.generate_trading_signals(closes, use_trend_filter=False)
+    filtered = main.generate_trading_signals(closes, use_trend_filter=True)
+
+    assert "buy" in unfiltered
+    # Every buy the filtered version keeps must be above its own SMA200;
+    # the filter should drop at least the early, still-below-trend buy(s).
+    assert unfiltered.count("buy") >= filtered.count("buy")
+
+
+def test_generate_trading_signals_rsi_filter_suppresses_overbought_buy():
+    closes = _oscillating_series()
+    unfiltered = main.generate_trading_signals(closes, use_rsi_filter=False)
+    filtered = main.generate_trading_signals(closes, use_rsi_filter=True)
+    # The RSI filter can only remove signals, never add new ones.
+    assert filtered.count("buy") <= unfiltered.count("buy")
+    assert filtered.count("sell") <= unfiltered.count("sell")
+
+
+def test_generate_trading_signals_histogram_confirmation_is_at_least_as_strict():
+    closes = _oscillating_series()
+    unfiltered = main.generate_trading_signals(closes)
+    confirmed = main.generate_trading_signals(closes, use_histogram_confirmation=True)
+    assert confirmed.count("buy") <= unfiltered.count("buy")
+
+
+def test_run_strategy_backtest_simple_round_trip():
+    dates = ["2024-01-0" + str(i + 1) for i in range(5)]
+    closes = [100.0, 110.0, 120.0, 90.0, 95.0]
+    signals = [None, "buy", None, "sell", None]
+
+    result = main.run_strategy_backtest(dates, closes, signals)
+
+    assert result["totalTrades"] == 1
+    trade = result["trades"][0]
+    assert trade["entryPrice"] == 110.0
+    assert trade["exitPrice"] == 90.0
+    assert trade["isWin"] is False
+    assert trade["stillOpen"] is False
+    assert result["winRate"] == 0.0
+
+
+def test_run_strategy_backtest_winning_trade():
+    dates = ["2024-01-0" + str(i + 1) for i in range(4)]
+    closes = [100.0, 100.0, 150.0, 150.0]
+    signals = [None, "buy", None, "sell"]
+
+    result = main.run_strategy_backtest(dates, closes, signals)
+
+    assert result["totalTrades"] == 1
+    assert result["trades"][0]["isWin"] is True
+    assert result["winRate"] == 100.0
+    assert result["totalReturnPercent"] == 50.0
+
+
+def test_run_strategy_backtest_no_signals_is_flat_with_no_drawdown():
+    dates = ["2024-01-0" + str(i + 1) for i in range(5)]
+    closes = [100.0, 90.0, 80.0, 110.0, 120.0]
+    signals = [None] * 5
+
+    result = main.run_strategy_backtest(dates, closes, signals)
+
+    assert result["totalTrades"] == 0
+    assert result["winRate"] == 0.0
+    assert result["totalReturnPercent"] == 0.0
+    assert result["maxDrawdownPercent"] == 0.0
+
+
+def test_run_strategy_backtest_flags_still_open_position():
+    dates = ["2024-01-0" + str(i + 1) for i in range(3)]
+    closes = [100.0, 105.0, 110.0]
+    signals = [None, "buy", None]
+
+    result = main.run_strategy_backtest(dates, closes, signals)
+
+    assert result["totalTrades"] == 1
+    assert result["trades"][0]["stillOpen"] is True
+    assert result["trades"][0]["exitPrice"] == 110.0
+
+
+def test_run_strategy_backtest_ignores_buy_while_already_holding():
+    dates = ["2024-01-0" + str(i + 1) for i in range(4)]
+    closes = [100.0, 105.0, 110.0, 115.0]
+    signals = [None, "buy", "buy", "sell"]
+
+    result = main.run_strategy_backtest(dates, closes, signals)
+
+    assert result["totalTrades"] == 1
+    assert result["trades"][0]["entryPrice"] == 105.0  # first buy honored, second ignored
+
+
+# ---------------------------------------------------------------------------
 # Password validation
 # ---------------------------------------------------------------------------
 

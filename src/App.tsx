@@ -11,6 +11,7 @@ import Money from "./components/Money";
 import Tools from "./components/Tools";
 import Portfolio from "./components/Portfolio";
 import AdminPanel from "./components/AdminPanel";
+import StrategyBacktester from "./components/StrategyBacktester";
 import ErrorBoundary from "./components/ErrorBoundary";
 
 const API_BASE_URL =
@@ -25,7 +26,8 @@ export type TabKey =
   | "money"
   | "tools"
   | "portfolio"
-  | "admin";
+  | "admin"
+  | "strategy";
 
 type Stock = {
   symbol: string;
@@ -407,6 +409,8 @@ function App() {
       {activeTab === "portfolio" && <Portfolio />}
 
       {activeTab === "admin" && <AdminPanel />}
+
+      {activeTab === "strategy" && <StrategyBacktester />}
 
       {activeTab === "calculator" && (
         <>
