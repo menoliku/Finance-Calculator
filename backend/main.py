@@ -3014,17 +3014,23 @@ MIN_ANNUAL_VOLATILITY = 0.05
 MAX_ANNUAL_VOLATILITY = 2.0
 
 
-def simulate_price_paths(
+def simulate_price_path_series(
     current_price: float,
     annual_drift: float,
     annual_volatility: float,
     horizon_days: int,
     num_paths: int = 2000,
     rng=None,
-) -> dict:
+) -> list:
     """Vectorized geometric Brownian motion Monte Carlo. `rng` is an injectable
     numpy Generator so tests can seed it for deterministic assertions; a real
-    request gets a fresh one."""
+    request gets a fresh one.
+
+    Returns the percentile band at a series of checkpoint days (day 0 through
+    horizon_days), not just the final day -- this is what lets the frontend
+    draw a widening "fan chart" instead of a single end-point range. Capped at
+    ~30 checkpoints regardless of horizon so a 365-day projection doesn't ship
+    hundreds of rows."""
     if rng is None:
         rng = np.random.default_rng()
 
@@ -3040,18 +3046,53 @@ def simulate_price_paths(
         size=(num_paths, horizon_days),
     )
 
-    cumulative_log_return = np.sum(daily_shocks, axis=1)
-    final_prices = current_price * np.exp(cumulative_log_return)
+    cumulative_log_return = np.cumsum(daily_shocks, axis=1)
 
-    percentiles = np.percentile(final_prices, [5, 16, 50, 84, 95])
+    checkpoint_days = sorted(set(
+        np.linspace(1, horizon_days, min(horizon_days, 29)).astype(int).tolist()
+    ))
 
-    return {
-        "extremeLow": float(percentiles[0]),
-        "low": float(percentiles[1]),
-        "median": float(percentiles[2]),
-        "high": float(percentiles[3]),
-        "extremeHigh": float(percentiles[4]),
-    }
+    series = [{
+        "day": 0,
+        "extremeLow": float(current_price),
+        "low": float(current_price),
+        "median": float(current_price),
+        "high": float(current_price),
+        "extremeHigh": float(current_price),
+    }]
+
+    for day in checkpoint_days:
+        prices_at_day = current_price * np.exp(cumulative_log_return[:, day - 1])
+        percentiles = np.percentile(prices_at_day, [5, 16, 50, 84, 95])
+
+        series.append({
+            "day": day,
+            "extremeLow": float(percentiles[0]),
+            "low": float(percentiles[1]),
+            "median": float(percentiles[2]),
+            "high": float(percentiles[3]),
+            "extremeHigh": float(percentiles[4]),
+        })
+
+    return series
+
+
+def simulate_price_paths(
+    current_price: float,
+    annual_drift: float,
+    annual_volatility: float,
+    horizon_days: int,
+    num_paths: int = 2000,
+    rng=None,
+) -> dict:
+    """The final-day percentile band, derived from the same simulation as
+    simulate_price_path_series (single source of truth -- the summary tiles
+    and the chart's last point always agree)."""
+    series = simulate_price_path_series(
+        current_price, annual_drift, annual_volatility, horizon_days, num_paths, rng
+    )
+    final = series[-1]
+    return {key: value for key, value in final.items() if key != "day"}
 
 
 PROJECTION_HORIZONS = {30, 90, 365}
@@ -3126,12 +3167,13 @@ def get_price_projection(
         signal_tilt = composite_score * MAX_ANNUAL_DRIFT_TILT
         adjusted_drift = stats["annualDrift"] + signal_tilt
 
-        projection = simulate_price_paths(
+        series = simulate_price_path_series(
             current_price=current_price,
             annual_drift=adjusted_drift,
             annual_volatility=stats["annualVolatility"],
             horizon_days=horizonDays,
         )
+        projection = {key: value for key, value in series[-1].items() if key != "day"}
 
         def factor_note(name, reading, description):
             return {"name": name, "reading": reading, "note": description}
@@ -3170,6 +3212,10 @@ def get_price_projection(
             "currentPrice": round(current_price, 2),
             "horizonDays": horizonDays,
             "projection": {key: round(value, 2) for key, value in projection.items()},
+            "series": [
+                {**{k: round(v, 2) for k, v in point.items() if k != "day"}, "day": point["day"]}
+                for point in series
+            ],
             "methodology": {
                 "annualVolatility": round(stats["annualVolatility"], 4),
                 "baselineDrift": round(stats["annualDrift"], 4),

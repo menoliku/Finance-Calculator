@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "../auth";
 import InfoTip from "./InfoTip";
+import PriceProjectionChart from "./PriceProjectionChart";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -19,6 +20,15 @@ type Factor = {
   note: string;
 };
 
+type ProjectionPoint = {
+  day: number;
+  extremeLow: number;
+  low: number;
+  median: number;
+  high: number;
+  extremeHigh: number;
+};
+
 type ProjectionData = {
   symbol: string;
   name: string;
@@ -31,6 +41,7 @@ type ProjectionData = {
     high: number;
     extremeHigh: number;
   };
+  series: ProjectionPoint[];
   methodology: {
     annualVolatility: number;
     baselineDrift: number;
@@ -128,6 +139,11 @@ export default function PriceProjectionCard({ symbol }: PriceProjectionCardProps
 
       {data && !isLoading && (
         <>
+          <PriceProjectionChart
+            series={data.series}
+            horizonLabel={HORIZONS.find((h) => h.key === horizon)?.label ?? `${horizon} Days`}
+          />
+
           <div className="summary-grid">
             <div className="summary-tile">
               <span className="summary-label">Low</span>

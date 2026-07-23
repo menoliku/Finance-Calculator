@@ -374,6 +374,75 @@ def test_composite_score_mixed_signals_is_weighted_average():
     assert main.compute_composite_score(signals) == main.SIGNAL_WEIGHTS["momentum"]
 
 
+def test_price_path_series_starts_at_current_price():
+    rng = np.random.default_rng(7)
+    series = main.simulate_price_path_series(
+        current_price=100.0, annual_drift=0.05, annual_volatility=0.3,
+        horizon_days=30, num_paths=500, rng=rng,
+    )
+    day_zero = series[0]
+    assert day_zero["day"] == 0
+    assert day_zero["extremeLow"] == day_zero["low"] == day_zero["median"] == day_zero["high"] == day_zero["extremeHigh"] == 100.0
+
+
+def test_price_path_series_length_capped_for_long_horizon():
+    rng = np.random.default_rng(7)
+    series = main.simulate_price_path_series(
+        current_price=100.0, annual_drift=0.05, annual_volatility=0.3,
+        horizon_days=365, num_paths=500, rng=rng,
+    )
+    # Day 0 plus at most 29 more checkpoints.
+    assert len(series) <= 30
+    assert series[-1]["day"] == 365
+
+
+def test_price_path_series_short_horizon_has_one_point_per_day():
+    rng = np.random.default_rng(7)
+    series = main.simulate_price_path_series(
+        current_price=100.0, annual_drift=0.0, annual_volatility=0.2,
+        horizon_days=10, num_paths=500, rng=rng,
+    )
+    # 10 days is under the 29-checkpoint cap, so every day gets a point.
+    assert len(series) == 11  # day 0 through day 10
+    assert [point["day"] for point in series] == list(range(11))
+
+
+def test_price_path_series_percentiles_ordered_at_every_checkpoint():
+    rng = np.random.default_rng(7)
+    series = main.simulate_price_path_series(
+        current_price=100.0, annual_drift=0.05, annual_volatility=0.4,
+        horizon_days=90, num_paths=1000, rng=rng,
+    )
+    for point in series[1:]:  # skip day 0, which is a fixed point by design
+        assert point["extremeLow"] <= point["low"] <= point["median"] <= point["high"] <= point["extremeHigh"]
+
+
+def test_price_path_series_band_widens_over_time():
+    rng = np.random.default_rng(7)
+    series = main.simulate_price_path_series(
+        current_price=100.0, annual_drift=0.0, annual_volatility=0.4,
+        horizon_days=180, num_paths=2000, rng=rng,
+    )
+    early_width = series[1]["high"] - series[1]["low"]
+    late_width = series[-1]["high"] - series[-1]["low"]
+    assert late_width > early_width
+
+
+def test_simulate_price_paths_matches_series_final_point():
+    """simulate_price_paths must be a thin wrapper -- same simulated
+    distribution as the series' last entry, not an independent run."""
+    result = main.simulate_price_paths(
+        current_price=100.0, annual_drift=0.05, annual_volatility=0.3,
+        horizon_days=30, num_paths=500, rng=np.random.default_rng(99),
+    )
+    series = main.simulate_price_path_series(
+        current_price=100.0, annual_drift=0.05, annual_volatility=0.3,
+        horizon_days=30, num_paths=500, rng=np.random.default_rng(99),
+    )
+    final = {k: v for k, v in series[-1].items() if k != "day"}
+    assert result == final
+
+
 def test_simulate_price_paths_orders_percentiles_correctly():
     rng = np.random.default_rng(42)
     result = main.simulate_price_paths(
