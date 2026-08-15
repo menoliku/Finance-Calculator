@@ -430,6 +430,7 @@ def home():
             "/money/budgets",
             "/money/networth",
             "/money/goals",
+            "/money/financial-health-check",
             "/portfolios",
         ]
     }
@@ -1338,6 +1339,216 @@ def delete_goal(
         raise HTTPException(status_code=404, detail="Goal not found")
 
     return {"message": "Goal deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Financial Health Check (Free tier): evaluates a user's overall financial
+# position against real published guidance and returns a single, honest next
+# priority rather than a vague score. Every benchmark below is sourced, not
+# invented:
+# - Emergency fund of 3-6 months of essential expenses, $1,000 starter
+#   milestone: CFPB, Fidelity, Vanguard, T. Rowe Price, Empower guidance.
+# - 50/15/5 savings allocation (essentials/retirement/short-term):
+#   Fidelity's saving-and-spending guideline.
+# - ~7% APR as the line where paying off debt beats investing: Investor.gov
+#   (credit cards average ~19-21% APR vs ~7-10% long-run market returns).
+# - Order of operations (starter fund -> high-interest debt -> full fund ->
+#   invest, capturing any employer match first): converges across CFPB,
+#   Fidelity, and Investor.gov guidance.
+# ---------------------------------------------------------------------------
+
+STARTER_EMERGENCY_FUND_TARGET = 1000.0
+EMERGENCY_FUND_MONTHS_LOW = 3
+EMERGENCY_FUND_MONTHS_HIGH = 6
+HIGH_INTEREST_DEBT_APR_THRESHOLD = 7.0
+ESSENTIAL_EXPENSE_RATIO_BENCHMARK = 0.50
+RETIREMENT_SAVINGS_RATE_BENCHMARK = 0.15
+SHORT_TERM_SAVINGS_RATE_BENCHMARK = 0.05
+
+FINANCIAL_HEALTH_STAGE_LABELS = {
+    "starter_emergency_fund": "Building starter emergency fund",
+    "debt_payoff": "Paying off high-interest debt",
+    "building_emergency_fund": "Building full emergency fund",
+    "investing": "Investing for the future",
+}
+
+
+def evaluate_financial_profile(
+    monthly_income: float,
+    monthly_essential_expenses: float,
+    emergency_fund_balance: float,
+    high_interest_debt_balance: float,
+    high_interest_debt_apr: float,
+    monthly_savings_to_emergency_fund: float,
+    monthly_savings_to_investing: float,
+    employer_match_status: str,
+) -> dict:
+    """Pure evaluation -- kept free of the DB/request layer so it can be unit
+    tested directly, same as compute_money_summary above. employer_match_status
+    is one of "none" | "full" | "partial"."""
+    has_high_interest_debt = (
+        high_interest_debt_balance > 0 and high_interest_debt_apr >= HIGH_INTEREST_DEBT_APR_THRESHOLD
+    )
+
+    target_low = monthly_essential_expenses * EMERGENCY_FUND_MONTHS_LOW
+    target_high = monthly_essential_expenses * EMERGENCY_FUND_MONTHS_HIGH
+    months_covered = (
+        emergency_fund_balance / monthly_essential_expenses
+        if monthly_essential_expenses > 0 else 0.0
+    )
+
+    if emergency_fund_balance < STARTER_EMERGENCY_FUND_TARGET:
+        fund_status = "starter_needed"
+    elif emergency_fund_balance < target_low:
+        fund_status = "building"
+    else:
+        fund_status = "fully_funded"
+
+    # The stage is the single highest-priority focus, in the order that
+    # converges across CFPB/Fidelity/Investor.gov guidance -- not a score,
+    # an action (matches the strategy backtester's "honest, not vague" bar).
+    if fund_status == "starter_needed":
+        stage = "starter_emergency_fund"
+    elif has_high_interest_debt:
+        stage = "debt_payoff"
+    elif fund_status == "building":
+        stage = "building_emergency_fund"
+    else:
+        stage = "investing"
+
+    recommended_focus = {
+        "starter_emergency_fund": (
+            f"Build a starter emergency fund of ${STARTER_EMERGENCY_FUND_TARGET:,.0f} before anything else. "
+            "This is a safety net so one unexpected expense doesn't force you onto a credit card."
+        ),
+        "debt_payoff": (
+            f"Focus on paying off your high-interest debt (~{high_interest_debt_apr:.1f}% APR). "
+            "Paying it down guarantees a return equal to that interest rate -- higher than typical "
+            "long-term market returns, so it comes before investing more."
+        ),
+        "building_emergency_fund": (
+            f"Build your emergency fund up to ${target_low:,.0f}-${target_high:,.0f} "
+            "(3-6 months of essential expenses). You're debt-free, so this comes before investing more."
+        ),
+        "investing": (
+            "You have a solid emergency fund and no high-interest debt -- your focus now is investing "
+            f"consistently, aiming for roughly {RETIREMENT_SAVINGS_RATE_BENCHMARK * 100:.0f}% of your income."
+        ),
+    }[stage]
+
+    notes = []
+
+    if employer_match_status == "partial":
+        notes.append(
+            "You mentioned your employer offers a retirement match you're not fully capturing. "
+            "This is worth prioritizing above almost everything else here -- it's an immediate, "
+            "guaranteed return that most other financial moves can't match."
+        )
+
+    if monthly_income > 0 and monthly_essential_expenses / monthly_income > ESSENTIAL_EXPENSE_RATIO_BENCHMARK:
+        notes.append(
+            f"Essential expenses are taking up more than {ESSENTIAL_EXPENSE_RATIO_BENCHMARK * 100:.0f}% of "
+            "your income (a common guideline caps this around there). If most of this is fixed cost like "
+            "rent, it may be worth looking for ways to trim it or grow income before big savings changes."
+        )
+
+    if (
+        stage in ("starter_emergency_fund", "debt_payoff", "building_emergency_fund")
+        and monthly_savings_to_investing > 0
+    ):
+        notes.append(
+            f"You mentioned investing about ${monthly_savings_to_investing:,.0f}/month even though your "
+            "emergency fund isn't fully built yet. Market investments can lose value right when you might "
+            "need to withdraw for an emergency -- consider redirecting this toward your fund first."
+        )
+
+    if stage == "investing" and monthly_savings_to_emergency_fund > monthly_savings_to_investing:
+        notes.append(
+            "Your emergency fund is already in good shape, but you're still putting more toward it each "
+            "month than toward investing. Now that it's funded, shifting more of your monthly savings "
+            "toward investing usually makes more sense."
+        )
+
+    monthly_savings_total = monthly_savings_to_emergency_fund + monthly_savings_to_investing
+    combined_savings_rate = (monthly_savings_total / monthly_income * 100) if monthly_income > 0 else 0.0
+    investment_rate = (monthly_savings_to_investing / monthly_income * 100) if monthly_income > 0 else 0.0
+    combined_benchmark = (RETIREMENT_SAVINGS_RATE_BENCHMARK + SHORT_TERM_SAVINGS_RATE_BENCHMARK) * 100
+
+    def rate_status(rate, benchmark):
+        if rate >= benchmark:
+            return "meeting"
+        if rate >= benchmark * 0.5:
+            return "below"
+        return "well_below"
+
+    return {
+        "stage": stage,
+        "stageLabel": FINANCIAL_HEALTH_STAGE_LABELS[stage],
+        "recommendedFocus": recommended_focus,
+        "profileSummary": f"{FINANCIAL_HEALTH_STAGE_LABELS[stage]}: {recommended_focus}",
+        "emergencyFund": {
+            "current": round(emergency_fund_balance, 2),
+            "starterTarget": STARTER_EMERGENCY_FUND_TARGET,
+            "targetLow": round(target_low, 2),
+            "targetHigh": round(target_high, 2),
+            "monthsCovered": round(months_covered, 1),
+            "status": fund_status,
+        },
+        "debt": {
+            "hasHighInterestDebt": has_high_interest_debt,
+            "balance": round(high_interest_debt_balance, 2),
+            "apr": round(high_interest_debt_apr, 2),
+            "threshold": HIGH_INTEREST_DEBT_APR_THRESHOLD,
+        },
+        "savingsRate": {
+            "monthlyTotal": round(monthly_savings_total, 2),
+            "ratePercent": round(combined_savings_rate, 1),
+            "benchmarkPercent": round(combined_benchmark, 1),
+            "status": rate_status(combined_savings_rate, combined_benchmark),
+        },
+        "investmentRate": {
+            "monthlyAmount": round(monthly_savings_to_investing, 2),
+            "ratePercent": round(investment_rate, 1),
+            "benchmarkPercent": RETIREMENT_SAVINGS_RATE_BENCHMARK * 100,
+            "status": rate_status(investment_rate, RETIREMENT_SAVINGS_RATE_BENCHMARK * 100),
+        },
+        "notes": notes,
+        "disclaimer": (
+            "This is general educational guidance based on published sources (CFPB, Fidelity, Vanguard) "
+            "and common personal-finance benchmarks -- not personalized financial advice. Consider "
+            "speaking with a licensed financial advisor for guidance specific to your situation."
+        ),
+    }
+
+
+class FinancialHealthCheckRequest(BaseModel):
+    monthlyIncome: float = Field(ge=0)
+    monthlyEssentialExpenses: float = Field(ge=0)
+    emergencyFundBalance: float = Field(ge=0)
+    highInterestDebtBalance: float = Field(ge=0)
+    highInterestDebtApr: float = Field(ge=0)
+    monthlySavingsToEmergencyFund: float = Field(ge=0)
+    monthlySavingsToInvesting: float = Field(ge=0)
+    employerMatchStatus: Literal["none", "full", "partial"]
+
+
+@app.post("/money/financial-health-check")
+@limiter.limit("20/minute")
+def financial_health_check(
+    request: Request,
+    payload: FinancialHealthCheckRequest,
+    current_user: User = Depends(get_current_user),
+):
+    return evaluate_financial_profile(
+        monthly_income=payload.monthlyIncome,
+        monthly_essential_expenses=payload.monthlyEssentialExpenses,
+        emergency_fund_balance=payload.emergencyFundBalance,
+        high_interest_debt_balance=payload.highInterestDebtBalance,
+        high_interest_debt_apr=payload.highInterestDebtApr,
+        monthly_savings_to_emergency_fund=payload.monthlySavingsToEmergencyFund,
+        monthly_savings_to_investing=payload.monthlySavingsToInvesting,
+        employer_match_status=payload.employerMatchStatus,
+    )
 
 
 # ---------------------------------------------------------------------------

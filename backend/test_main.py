@@ -690,6 +690,144 @@ def test_developer_code_accepts_correct_code(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Financial Health Check: evaluate_financial_profile
+# ---------------------------------------------------------------------------
+
+def _profile(
+    monthly_income=5000.0,
+    monthly_essential_expenses=2000.0,
+    emergency_fund_balance=0.0,
+    high_interest_debt_balance=0.0,
+    high_interest_debt_apr=0.0,
+    monthly_savings_to_emergency_fund=0.0,
+    monthly_savings_to_investing=0.0,
+    employer_match_status="none",
+):
+    return main.evaluate_financial_profile(
+        monthly_income=monthly_income,
+        monthly_essential_expenses=monthly_essential_expenses,
+        emergency_fund_balance=emergency_fund_balance,
+        high_interest_debt_balance=high_interest_debt_balance,
+        high_interest_debt_apr=high_interest_debt_apr,
+        monthly_savings_to_emergency_fund=monthly_savings_to_emergency_fund,
+        monthly_savings_to_investing=monthly_savings_to_investing,
+        employer_match_status=employer_match_status,
+    )
+
+
+def test_financial_health_stage_progression_no_fund():
+    result = _profile(emergency_fund_balance=200.0)
+    assert result["stage"] == "starter_emergency_fund"
+
+
+def test_financial_health_stage_progression_starter_done_but_has_debt():
+    result = _profile(
+        emergency_fund_balance=1500.0,
+        high_interest_debt_balance=3000.0,
+        high_interest_debt_apr=22.0,
+    )
+    assert result["stage"] == "debt_payoff"
+
+
+def test_financial_health_stage_progression_debt_free_building_full_fund():
+    result = _profile(emergency_fund_balance=3000.0, monthly_essential_expenses=2000.0)
+    # 3000 is above the $1,000 starter target but below 3x essential expenses (6000)
+    assert result["stage"] == "building_emergency_fund"
+
+
+def test_financial_health_stage_progression_fully_funded_and_debt_free():
+    result = _profile(emergency_fund_balance=8000.0, monthly_essential_expenses=2000.0)
+    assert result["stage"] == "investing"
+
+
+def test_financial_health_low_apr_debt_does_not_trigger_debt_payoff_stage():
+    # A 4% APR auto loan is below the ~7% high-interest threshold -- should
+    # not derail the emergency-fund priority.
+    result = _profile(
+        emergency_fund_balance=8000.0,
+        monthly_essential_expenses=2000.0,
+        high_interest_debt_balance=10000.0,
+        high_interest_debt_apr=4.0,
+    )
+    assert result["debt"]["hasHighInterestDebt"] is False
+    assert result["stage"] == "investing"
+
+
+def test_financial_health_employer_match_note_fires_regardless_of_stage():
+    result = _profile(emergency_fund_balance=0.0, employer_match_status="partial")
+    assert result["stage"] == "starter_emergency_fund"
+    assert any("employer" in note.lower() for note in result["notes"])
+
+
+def test_financial_health_no_employer_match_note_when_full_match_captured():
+    result = _profile(employer_match_status="full")
+    assert not any("employer" in note.lower() for note in result["notes"])
+
+
+def test_financial_health_essential_expense_ratio_note():
+    result = _profile(monthly_income=3000.0, monthly_essential_expenses=2500.0)  # 83%
+    assert any("essential expenses" in note.lower() for note in result["notes"])
+
+
+def test_financial_health_no_essential_expense_note_when_under_benchmark():
+    result = _profile(monthly_income=5000.0, monthly_essential_expenses=2000.0)  # 40%
+    assert not any("essential expenses" in note.lower() for note in result["notes"])
+
+
+def test_financial_health_warns_about_investing_before_fund_is_built():
+    result = _profile(
+        emergency_fund_balance=200.0,
+        monthly_savings_to_investing=300.0,
+    )
+    assert result["stage"] == "starter_emergency_fund"
+    assert any("isn't fully built" in note for note in result["notes"])
+
+
+def test_financial_health_suggests_reallocating_once_fund_is_full():
+    result = _profile(
+        emergency_fund_balance=8000.0,
+        monthly_essential_expenses=2000.0,
+        monthly_savings_to_emergency_fund=500.0,
+        monthly_savings_to_investing=100.0,
+    )
+    assert result["stage"] == "investing"
+    assert any("shifting more" in note for note in result["notes"])
+
+
+def test_financial_health_savings_rate_math():
+    result = _profile(
+        monthly_income=4000.0,
+        monthly_savings_to_emergency_fund=400.0,
+        monthly_savings_to_investing=400.0,
+    )
+    assert result["savingsRate"]["monthlyTotal"] == 800.0
+    assert result["savingsRate"]["ratePercent"] == 20.0  # 800/4000
+    assert result["savingsRate"]["status"] == "meeting"  # benchmark is 20%
+
+
+def test_financial_health_investment_rate_below_benchmark():
+    result = _profile(monthly_income=4000.0, monthly_savings_to_investing=200.0)  # 5%
+    assert result["investmentRate"]["ratePercent"] == 5.0
+    assert result["investmentRate"]["status"] == "well_below"  # benchmark is 15%
+
+
+def test_financial_health_zero_income_does_not_crash():
+    result = _profile(monthly_income=0.0, monthly_savings_to_investing=100.0)
+    assert result["savingsRate"]["ratePercent"] == 0.0
+    assert result["investmentRate"]["ratePercent"] == 0.0
+
+
+def test_financial_health_zero_essential_expenses_does_not_crash():
+    result = _profile(monthly_essential_expenses=0.0, emergency_fund_balance=500.0)
+    assert result["emergencyFund"]["monthsCovered"] == 0.0
+
+
+def test_financial_health_disclaimer_always_present():
+    result = _profile()
+    assert "not personalized financial advice" in result["disclaimer"]
+
+
+# ---------------------------------------------------------------------------
 # Portfolios: compute_holdings (average-cost ledger math)
 # ---------------------------------------------------------------------------
 

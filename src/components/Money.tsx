@@ -4,6 +4,7 @@ import InfoTip from "./InfoTip";
 import BudgetSettings from "./BudgetSettings";
 import NetWorthCard from "./NetWorthCard";
 import GoalsCard from "./GoalsCard";
+import FinancialHealthCheck from "./FinancialHealthCheck";
 import { EXPENSE_CATEGORIES } from "../lib/moneyCategories";
 
 const API_BASE_URL =
@@ -380,6 +381,7 @@ export default function Money() {
       <BudgetSettings />
       <NetWorthCard />
       <GoalsCard />
+      <FinancialHealthCheck />
     </div>
   );
 }

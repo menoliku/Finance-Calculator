@@ -13,12 +13,12 @@ type SidebarProps = {
 
 const NAV_ITEMS: { key: TabKey; label: string }[] = [
   { key: "money", label: "Money" },
-  { key: "portfolio", label: "Portfolio" },
   { key: "tools", label: "Tools" },
-  { key: "calculator", label: "Calculator" },
-  { key: "analysis", label: "Analysis" },
   { key: "recommendations", label: "Recommendations" },
   { key: "watchlist", label: "Watchlist" },
+  { key: "portfolio", label: "Portfolio" },
+  { key: "analysis", label: "Analysis" },
+  { key: "calculator", label: "Calculator" },
   { key: "compare", label: "Compare" },
   { key: "strategy", label: "Strategy" },
 ];

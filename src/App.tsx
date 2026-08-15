@@ -77,7 +77,7 @@ function App() {
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
 
   const [stockPrice, setStockPrice] = useState<StockPrice | null>(null);
-  const [activeTab, setActiveTab] = useState<TabKey>("calculator");
+  const [activeTab, setActiveTab] = useState<TabKey>("money");
 
   const [startDate, setStartDate] = useState<string>("");
   const [principal, setPrincipal] = useState<number>(0);
