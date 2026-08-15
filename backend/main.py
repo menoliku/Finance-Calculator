@@ -1481,6 +1481,44 @@ def evaluate_financial_profile(
             return "below"
         return "well_below"
 
+    # A concrete dollar recommendation, not just a percent -- and stage-aware:
+    # the 50/15/5 split only makes sense once the emergency fund/debt priority
+    # is handled. Before that, the guideline amount should flow entirely
+    # toward whatever the current stage's priority is, not be split.
+    recommended_total = monthly_income * (
+        RETIREMENT_SAVINGS_RATE_BENCHMARK + SHORT_TERM_SAVINGS_RATE_BENCHMARK
+    )
+
+    if stage == "investing":
+        recommended_investing = monthly_income * RETIREMENT_SAVINGS_RATE_BENCHMARK
+        recommended_short_term = monthly_income * SHORT_TERM_SAVINGS_RATE_BENCHMARK
+        savings_recommendation = {
+            "totalMonthly": round(recommended_total, 2),
+            "towardInvesting": round(recommended_investing, 2),
+            "towardCurrentPriority": 0.0,
+            "explanation": (
+                f"Fidelity's 50/15/5 guideline suggests aiming for about ${recommended_investing:,.0f}/month "
+                f"toward investing (15% of income) and ${recommended_short_term:,.0f}/month toward short-term "
+                f"savings (5%), for roughly ${recommended_total:,.0f}/month total."
+            ),
+        }
+    else:
+        priority_label = {
+            "starter_emergency_fund": "your starter emergency fund is built",
+            "debt_payoff": "your high-interest debt is paid off",
+            "building_emergency_fund": "your emergency fund is fully built",
+        }[stage]
+        savings_recommendation = {
+            "totalMonthly": round(recommended_total, 2),
+            "towardInvesting": 0.0,
+            "towardCurrentPriority": round(recommended_total, 2),
+            "explanation": (
+                f"A common guideline is to save around ${recommended_total:,.0f}/month (roughly 20% of "
+                f"income) -- but until {priority_label}, a common approach is to direct all of it there "
+                "rather than splitting some toward investing yet."
+            ),
+        }
+
     return {
         "stage": stage,
         "stageLabel": FINANCIAL_HEALTH_STAGE_LABELS[stage],
@@ -1512,6 +1550,8 @@ def evaluate_financial_profile(
             "benchmarkPercent": RETIREMENT_SAVINGS_RATE_BENCHMARK * 100,
             "status": rate_status(investment_rate, RETIREMENT_SAVINGS_RATE_BENCHMARK * 100),
         },
+        "monthlySavingsRecommendation": savings_recommendation,
+        "readyToInvest": stage == "investing",
         "notes": notes,
         "disclaimer": (
             "This is general educational guidance based on published sources (CFPB, Fidelity, Vanguard) "
@@ -2453,6 +2493,11 @@ CORE_ETFS = [
     # instead of forcing a choice between bonds and single dividend stocks.
     {"symbol": "SCHD", "category": "dividend_etf"},
     {"symbol": "VYM", "category": "dividend_etf"},
+    # REITs as their own labeled diversifier -- real estate has historically
+    # low correlation to the broad stock market, so this isn't just "more
+    # stocks," it's a genuinely different asset class.
+    {"symbol": "VNQ", "category": "reit_etf"},
+    {"symbol": "SCHH", "category": "reit_etf"},
 ]
 
 CORE_CATEGORY_RISK = {
@@ -2460,6 +2505,7 @@ CORE_CATEGORY_RISK = {
     "intl_etf": "medium",
     "bond_etf": "low",
     "dividend_etf": "medium",
+    "reit_etf": "medium",
 }
 
 # GICS-style sectors as Yahoo's screener defines them (yf.EquityQuery('eq',
@@ -2765,16 +2811,21 @@ STYLE_WEIGHTS = {
     ("conservative", "primary"): {"dividend": 2.5, "defensive": 2.0, "value": 1.0, "core": 0.5, "growth": -1.5},
 }
 
+# reit_etf is always offered as a diversifier (real estate has historically
+# low correlation to the broad market) rather than competing for a slot, so
+# its weight only needs to stay non-negative -- it rises with income need and
+# falls with risk tolerance, same direction as bond_etf/dividend_etf, just
+# never actively penalized the way dividend_etf is for a pure-growth investor.
 ETF_CATEGORY_WEIGHTS = {
-    ("aggressive", "none"): {"broad_etf": 2.0, "intl_etf": 1.0, "bond_etf": -1.0, "dividend_etf": -1.0},
-    ("aggressive", "some"): {"broad_etf": 2.0, "intl_etf": 1.0, "dividend_etf": 1.0, "bond_etf": -0.5},
-    ("aggressive", "primary"): {"dividend_etf": 2.5, "broad_etf": 1.0, "bond_etf": 0.5, "intl_etf": 0.0},
-    ("moderate", "none"): {"broad_etf": 2.0, "intl_etf": 1.0, "bond_etf": 0.5, "dividend_etf": -0.5},
-    ("moderate", "some"): {"broad_etf": 1.5, "dividend_etf": 1.5, "bond_etf": 1.0, "intl_etf": 0.5},
-    ("moderate", "primary"): {"dividend_etf": 2.5, "bond_etf": 1.5, "broad_etf": 0.5, "intl_etf": 0.0},
-    ("conservative", "none"): {"broad_etf": 1.5, "bond_etf": 1.5, "intl_etf": 0.5, "dividend_etf": 0.5},
-    ("conservative", "some"): {"bond_etf": 2.0, "dividend_etf": 1.5, "broad_etf": 1.0, "intl_etf": 0.0},
-    ("conservative", "primary"): {"dividend_etf": 2.5, "bond_etf": 2.0, "broad_etf": 0.5, "intl_etf": -0.5},
+    ("aggressive", "none"): {"broad_etf": 2.0, "intl_etf": 1.0, "bond_etf": -1.0, "dividend_etf": -1.0, "reit_etf": 0.0},
+    ("aggressive", "some"): {"broad_etf": 2.0, "intl_etf": 1.0, "dividend_etf": 1.0, "bond_etf": -0.5, "reit_etf": 0.5},
+    ("aggressive", "primary"): {"dividend_etf": 2.5, "broad_etf": 1.0, "bond_etf": 0.5, "intl_etf": 0.0, "reit_etf": 1.0},
+    ("moderate", "none"): {"broad_etf": 2.0, "intl_etf": 1.0, "bond_etf": 0.5, "dividend_etf": -0.5, "reit_etf": 0.5},
+    ("moderate", "some"): {"broad_etf": 1.5, "dividend_etf": 1.5, "bond_etf": 1.0, "intl_etf": 0.5, "reit_etf": 1.0},
+    ("moderate", "primary"): {"dividend_etf": 2.5, "bond_etf": 1.5, "broad_etf": 0.5, "intl_etf": 0.0, "reit_etf": 1.5},
+    ("conservative", "none"): {"broad_etf": 1.5, "bond_etf": 1.5, "intl_etf": 0.5, "dividend_etf": 0.5, "reit_etf": 1.0},
+    ("conservative", "some"): {"bond_etf": 2.0, "dividend_etf": 1.5, "broad_etf": 1.0, "intl_etf": 0.0, "reit_etf": 1.5},
+    ("conservative", "primary"): {"dividend_etf": 2.5, "bond_etf": 2.0, "broad_etf": 0.5, "intl_etf": -0.5, "reit_etf": 1.5},
 }
 
 
@@ -2828,6 +2879,7 @@ def build_core_etf_reason(candidate, risk_profile, income_need):
         "intl_etf": "a diversified fund of international companies",
         "bond_etf": "a diversified bond fund",
         "dividend_etf": "a diversified fund of established dividend-paying companies",
+        "reit_etf": "a diversified fund of real estate investment trusts (REITs)",
     }
 
     return (
@@ -2894,28 +2946,59 @@ def build_profile_summary(risk_profile, horizon, income_need, experience):
 
 
 def select_diversified_picks(scored_stocks, count, max_per_sector=2):
-    """Cap picks per sector so results actually span the market (tech, healthcare,
-    financials, etc.) instead of clustering wherever the scores happen to be highest."""
-    ranked = sorted(scored_stocks, key=lambda c: c["score"], reverse=True)
+    """Spans the market (tech, healthcare, financials, etc.) instead of
+    clustering wherever the scores happen to be highest -- a plain score-then-
+    cap walk can still land on just 1-2 sectors when `count` is small (a
+    free-tier run of 3 could easily become 2 tech + 1 more tech-adjacent
+    before the cap ever forces a different sector to be considered). Round-
+    robin across sectors FIRST so breadth is guaranteed, then fill any
+    remaining slots by score."""
+    ranked_by_sector: dict[str, list] = defaultdict(list)
+
+    for candidate in sorted(scored_stocks, key=lambda c: c["score"], reverse=True):
+        sector = candidate.get("sector") or "Other"
+        ranked_by_sector[sector].append(candidate)
+
+    # Sector visit order: by that sector's best available score, so the
+    # strongest sectors still get first pick when only a few slots exist.
+    sector_order = sorted(
+        ranked_by_sector.keys(),
+        key=lambda sector: ranked_by_sector[sector][0]["score"],
+        reverse=True,
+    )
+
     picks = []
     sector_counts = defaultdict(int)
+    sector_cursor = defaultdict(int)  # next unpicked index within each sector's list
 
-    for candidate in ranked:
-        sector = candidate.get("sector") or "Other"
+    round_num = 0
+    while len(picks) < count and round_num < max_per_sector:
+        made_a_pick_this_round = False
 
-        if sector_counts[sector] >= max_per_sector:
-            continue
+        for sector in sector_order:
+            if len(picks) >= count:
+                break
 
-        picks.append(candidate)
-        sector_counts[sector] += 1
+            candidates = ranked_by_sector[sector]
+            cursor = sector_cursor[sector]
 
-        if len(picks) >= count:
+            if sector_counts[sector] >= max_per_sector or cursor >= len(candidates):
+                continue
+
+            picks.append(candidates[cursor])
+            sector_cursor[sector] += 1
+            sector_counts[sector] += 1
+            made_a_pick_this_round = True
+
+        round_num += 1
+
+        if not made_a_pick_this_round:
             break
 
     return picks
 
 
-FREE_TIER_RECOMMENDATION_LIMIT = 2
+FREE_TIER_RECOMMENDATION_LIMIT = 3
 
 
 @app.post("/stocks/recommendations")
@@ -2991,6 +3074,17 @@ def recommend_stocks(request: Request, payload: RecommendationRequest, current_u
             )
             if dividend_etf:
                 core_holdings.append(dividend_etf)
+
+        # REITs are always offered as a diversifier -- real estate behaves
+        # differently enough from stocks and bonds to be worth showing to
+        # every risk profile, not just conditionally like dividend/bond funds.
+        reit_etf = max(
+            (c for c in scored_core if c["category"] == "reit_etf"),
+            key=lambda c: c["score"],
+            default=None
+        )
+        if reit_etf:
+            core_holdings.append(reit_etf)
 
         if risk_profile != "aggressive":
             bond_etf = max(

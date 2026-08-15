@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { authFetch, getToken, onAuthChange } from "../auth";
+import StockSymbolSearch from "./StockSymbolSearch";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -153,11 +154,11 @@ export default function Watchlist({ onSelectSymbol }: WatchlistProps) {
       </div>
 
       <form className="watchlist-add-row" onSubmit={handleAdd}>
-        <input
-          type="text"
-          placeholder="Add a symbol, e.g. AAPL"
+        <StockSymbolSearch
           value={newSymbol}
-          onChange={(e) => setNewSymbol(e.target.value)}
+          onChange={setNewSymbol}
+          onSelect={(stock) => setNewSymbol(stock.symbol)}
+          placeholder="Add a symbol, e.g. AAPL"
         />
         <button type="submit" disabled={isAdding}>
           {isAdding ? "Adding..." : "Add"}

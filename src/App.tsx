@@ -312,77 +312,81 @@ function App() {
         <ErrorBoundary key={activeTab}>
         <h1>Finance Backtester</h1>
 
-        <p className="intro-text">
-          Search a stock, choose when you started investing, then enter your initial and recurring investment amount.
-        </p>
+        {(activeTab === "calculator" || activeTab === "analysis") && (
+          <>
+            <p className="intro-text">
+              Search a stock, choose when you started investing, then enter your initial and recurring investment amount.
+            </p>
 
-        <div className="field-group stock-search-box">
-        <label className="field-label">
-          Stock
-          <InfoTip text="Search by ticker symbol like AAPL, TSLA, D05.SI, or by company name like Apple or DBS." />
-        </label>
+            <div className="field-group stock-search-box">
+            <label className="field-label">
+              Stock
+              <InfoTip text="Search by ticker symbol like AAPL, TSLA, D05.SI, or by company name like Apple or DBS." />
+            </label>
 
-        <input
-          type="text"
-          placeholder="Enter stock symbol or company name"
-          value={stockSearch}
-          onChange={(e) => {
-            const value = e.target.value;
-            setStockSearch(value);
-            setStockSymbol(value.toUpperCase());
-            setBacktestResult(null);
-            searchStocks(value);
-          }}
-        />
+            <input
+              type="text"
+              placeholder="Enter stock symbol or company name"
+              value={stockSearch}
+              onChange={(e) => {
+                const value = e.target.value;
+                setStockSearch(value);
+                setStockSymbol(value.toUpperCase());
+                setBacktestResult(null);
+                searchStocks(value);
+              }}
+            />
 
-        {isSearching && <p className="helper-text">Searching...</p>}
+            {isSearching && <p className="helper-text">Searching...</p>}
 
-        {showDropdown && stockOptions.length > 0 && (
-          <ul className="dropdown">
-            {stockOptions.map((stock) => (
-              <li key={stock.symbol} onClick={() => handleSelectStock(stock)}>
-                <strong>{stock.symbol}</strong> - {stock.name}
-                <br />
-                <small>
-                  {stock.exchange} | {stock.quoteType}
-                </small>
-              </li>
-            ))}
-          </ul>
+            {showDropdown && stockOptions.length > 0 && (
+              <ul className="dropdown">
+                {stockOptions.map((stock) => (
+                  <li key={stock.symbol} onClick={() => handleSelectStock(stock)}>
+                    <strong>{stock.symbol}</strong> - {stock.name}
+                    <br />
+                    <small>
+                      {stock.exchange} | {stock.quoteType}
+                    </small>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {isPriceLoading && <p className="helper-text">Loading price...</p>}
+
+          {stockPrice && (
+            <div className="price-card">
+              <div>
+                <p className="stock-name">{stockPrice.name}</p>
+                <p className="stock-price">
+                  {stockPrice.price !== null
+                    ? formatMoney(stockPrice.price, stockPrice.currency)
+                    : "N/A"}
+                </p>
+              </div>
+
+              <div className="price-details">
+                <p>
+                  <strong>Symbol:</strong> {stockPrice.symbol}
+                </p>
+
+                <p>
+                  <strong>Previous Close:</strong>{" "}
+                  {stockPrice.previousClose !== null
+                    ? formatMoney(stockPrice.previousClose, stockPrice.currency)
+                    : "N/A"}
+                </p>
+
+                <p>
+                  <strong>Market Cap:</strong> {formatMarketCap(stockPrice.marketCap)}
+                </p>
+              </div>
+            </div>
+          )}
+          </>
         )}
-      </div>
-
-      {isPriceLoading && <p className="helper-text">Loading price...</p>}
-
-      {stockPrice && (
-        <div className="price-card">
-          <div>
-            <p className="stock-name">{stockPrice.name}</p>
-            <p className="stock-price">
-              {stockPrice.price !== null
-                ? formatMoney(stockPrice.price, stockPrice.currency)
-                : "N/A"}
-            </p>
-          </div>
-
-          <div className="price-details">
-            <p>
-              <strong>Symbol:</strong> {stockPrice.symbol}
-            </p>
-
-            <p>
-              <strong>Previous Close:</strong>{" "}
-              {stockPrice.previousClose !== null
-                ? formatMoney(stockPrice.previousClose, stockPrice.currency)
-                : "N/A"}
-            </p>
-
-            <p>
-              <strong>Market Cap:</strong> {formatMarketCap(stockPrice.marketCap)}
-            </p>
-          </div>
-        </div>
-      )}
 
       {activeTab === "analysis" && (
         <>
@@ -402,7 +406,9 @@ function App() {
 
       {activeTab === "compare" && <StockComparison />}
 
-      {activeTab === "money" && <Money />}
+      {activeTab === "money" && (
+        <Money onNavigateToRecommendations={() => setActiveTab("recommendations")} />
+      )}
 
       {activeTab === "tools" && <Tools />}
 

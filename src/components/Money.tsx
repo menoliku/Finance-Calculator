@@ -48,7 +48,11 @@ function formatCurrency(value: number): string {
   })}`;
 }
 
-export default function Money() {
+type MoneyProps = {
+  onNavigateToRecommendations: () => void;
+};
+
+export default function Money({ onNavigateToRecommendations }: MoneyProps) {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => !!getToken());
   const [month, setMonth] = useState<string>(currentMonth());
   const [summary, setSummary] = useState<MoneySummary | null>(null);
@@ -381,7 +385,7 @@ export default function Money() {
       <BudgetSettings />
       <NetWorthCard />
       <GoalsCard />
-      <FinancialHealthCheck />
+      <FinancialHealthCheck onNavigateToRecommendations={onNavigateToRecommendations} />
     </div>
   );
 }

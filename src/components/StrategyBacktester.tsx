@@ -3,6 +3,7 @@ import { authFetch, getToken, onAuthChange } from "../auth";
 import { hasTier } from "../lib/tiers";
 import InfoTip from "./InfoTip";
 import EquityCurveChart from "./EquityCurveChart";
+import StockSymbolSearch from "./StockSymbolSearch";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -155,11 +156,11 @@ export default function StrategyBacktester() {
       </div>
 
       <form className="watchlist-add-row" onSubmit={handleRun}>
-        <input
-          type="text"
-          placeholder="Enter a symbol, e.g. AAPL"
+        <StockSymbolSearch
           value={symbol}
-          onChange={(e) => setSymbol(e.target.value)}
+          onChange={setSymbol}
+          onSelect={(stock) => setSymbol(stock.symbol)}
+          placeholder="Enter a symbol, e.g. AAPL"
         />
         <button type="submit" disabled={isRunning}>
           {isRunning ? "Running..." : "Run Backtest"}

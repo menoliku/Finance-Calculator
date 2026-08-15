@@ -1293,6 +1293,18 @@ hr {
   gap: 12px;
 }
 
+.recommendation-sector-group {
+  margin-top: 16px;
+}
+
+.recommendation-sector-group h4 {
+  margin: 0 0 8px 0;
+  color: #aeb9d2;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .recommendation-card {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -1509,6 +1521,10 @@ hr {
 }
 
 .watchlist-add-row input {
+  flex: 1;
+}
+
+.watchlist-add-row .stock-search-box {
   flex: 1;
 }
 

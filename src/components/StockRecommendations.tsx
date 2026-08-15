@@ -69,6 +69,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   intl_etf: "International ETF",
   bond_etf: "Bond ETF",
   dividend_etf: "Dividend ETF",
+  reit_etf: "REIT ETF",
 };
 
 // Text-only coloring (headings, inline labels) -- shares the analyst gauge's status classes.
@@ -85,6 +86,29 @@ const RISK_BUCKET_BADGE_CLASS: Record<string, string> = {
   medium: "sentiment-neutral",
   high: "sentiment-negative",
 };
+
+// Groups picks by sector, preserving the backend's original order (its
+// round-robin selection already puts the strongest sector first) so the
+// "different industries" spread the engine guarantees is actually visible,
+// not just present in a flat list.
+function groupPicksBySector(
+  items: RecommendationItem[]
+): [string, RecommendationItem[]][] {
+  const groups = new Map<string, RecommendationItem[]>();
+
+  for (const item of items) {
+    const sector = item.sector ?? "Other";
+    const existing = groups.get(sector);
+
+    if (existing) {
+      existing.push(item);
+    } else {
+      groups.set(sector, [item]);
+    }
+  }
+
+  return Array.from(groups.entries());
+}
 
 function formatMoney(value: number | null, currency: string) {
   if (value === null || value === undefined) {
@@ -306,11 +330,18 @@ export default function StockRecommendations() {
 
         <div>
           <h3>Suggested Picks</h3>
-          <div className="recommendation-cards">
-            {result.recommendations.map((item) => (
-              <RecommendationCard key={item.symbol} item={item} />
-            ))}
-          </div>
+          <p className="helper-text">Spread across industries so you're not overly reliant on any one sector.</p>
+
+          {groupPicksBySector(result.recommendations).map(([sector, items]) => (
+            <div key={sector} className="recommendation-sector-group">
+              <h4>{sector}</h4>
+              <div className="recommendation-cards">
+                {items.map((item) => (
+                  <RecommendationCard key={item.symbol} item={item} />
+                ))}
+              </div>
+            </div>
+          ))}
 
           {!result.isPremiumUser &&
             result.totalPicksAvailable > result.recommendations.length && (

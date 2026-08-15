@@ -127,6 +127,25 @@ def test_weight_matrix_covers_every_profile_and_need_combination():
             assert (profile, need) in main.ETF_CATEGORY_WEIGHTS
 
 
+def test_reit_etf_weight_present_and_non_negative_for_every_combination():
+    for profile in ("conservative", "moderate", "aggressive"):
+        for need in ("none", "some", "primary"):
+            weights = main.ETF_CATEGORY_WEIGHTS[(profile, need)]
+            assert "reit_etf" in weights
+            # Unlike dividend_etf, REITs are always offered as a diversifier,
+            # never actively penalized for a given profile.
+            assert weights["reit_etf"] >= 0
+
+
+def test_reit_etf_appeal_rises_with_income_need_and_falls_with_risk_tolerance():
+    aggressive_none = main.ETF_CATEGORY_WEIGHTS[("aggressive", "none")]["reit_etf"]
+    aggressive_primary = main.ETF_CATEGORY_WEIGHTS[("aggressive", "primary")]["reit_etf"]
+    conservative_none = main.ETF_CATEGORY_WEIGHTS[("conservative", "none")]["reit_etf"]
+
+    assert aggressive_primary > aggressive_none
+    assert conservative_none > aggressive_none
+
+
 def test_aggressive_with_no_income_need_favors_growth_over_dividends():
     weights = main.derive_style_weights("aggressive", "none")
 
@@ -827,6 +846,35 @@ def test_financial_health_disclaimer_always_present():
     assert "not personalized financial advice" in result["disclaimer"]
 
 
+def test_financial_health_savings_recommendation_directs_all_to_priority_when_not_investing():
+    result = _profile(monthly_income=4000.0, emergency_fund_balance=0.0)
+    rec = result["monthlySavingsRecommendation"]
+    assert result["stage"] == "starter_emergency_fund"
+    assert rec["towardInvesting"] == 0.0
+    assert rec["towardCurrentPriority"] == rec["totalMonthly"]
+    assert rec["totalMonthly"] == 800.0  # 20% of 4000
+
+
+def test_financial_health_savings_recommendation_splits_when_investing_stage():
+    result = _profile(
+        monthly_income=6000.0, monthly_essential_expenses=2000.0, emergency_fund_balance=15000.0
+    )
+    rec = result["monthlySavingsRecommendation"]
+    assert result["stage"] == "investing"
+    assert rec["towardCurrentPriority"] == 0.0
+    assert rec["towardInvesting"] == 900.0  # 15% of 6000
+    assert rec["totalMonthly"] == 1200.0  # 20% of 6000
+
+
+def test_financial_health_ready_to_invest_flag_matches_stage():
+    not_ready = _profile(emergency_fund_balance=0.0)
+    ready = _profile(
+        monthly_essential_expenses=2000.0, emergency_fund_balance=15000.0
+    )
+    assert not_ready["readyToInvest"] is False
+    assert ready["readyToInvest"] is True
+
+
 # ---------------------------------------------------------------------------
 # Portfolios: compute_holdings (average-cost ledger math)
 # ---------------------------------------------------------------------------
@@ -1094,6 +1142,41 @@ def test_select_diversified_picks_respects_requested_count():
     candidates = [{"symbol": f"S{i}", "sector": "Energy", "score": i} for i in range(10)]
     picks = main.select_diversified_picks(candidates, count=3, max_per_sector=10)
     assert len(picks) == 3
+
+
+def test_select_diversified_picks_round_robins_across_sectors_before_doubling_up():
+    # Technology and Finance score far higher than Healthcare and Energy. A
+    # naive "sort everything, then cap per sector while walking" would pick
+    # 2 Technology + 2 Finance and never even consider the other two sectors
+    # at count=4. Round-robin must guarantee all 4 sectors appear first.
+    candidates = (
+        [{"symbol": f"TECH{i}", "sector": "Technology", "score": 100 - i} for i in range(3)]
+        + [{"symbol": f"FIN{i}", "sector": "Finance", "score": 90 - i} for i in range(3)]
+        + [{"symbol": f"HC{i}", "sector": "Healthcare", "score": 10 - i} for i in range(3)]
+        + [{"symbol": f"NRG{i}", "sector": "Energy", "score": 5 - i} for i in range(3)]
+    )
+
+    picks = main.select_diversified_picks(candidates, count=4, max_per_sector=2)
+
+    assert len(picks) == 4
+    assert {p["sector"] for p in picks} == {"Technology", "Finance", "Healthcare", "Energy"}
+    # Within each represented sector, the best-scoring candidate is the one kept.
+    assert {p["symbol"] for p in picks} == {"TECH0", "FIN0", "HC0", "NRG0"}
+
+
+def test_select_diversified_picks_second_round_still_respects_cap_and_score_order():
+    candidates = (
+        [{"symbol": f"TECH{i}", "sector": "Technology", "score": 100 - i} for i in range(3)]
+        + [{"symbol": f"FIN{i}", "sector": "Finance", "score": 90 - i} for i in range(3)]
+    )
+
+    picks = main.select_diversified_picks(candidates, count=4, max_per_sector=2)
+
+    tech_picks = {p["symbol"] for p in picks if p["sector"] == "Technology"}
+    fin_picks = {p["symbol"] for p in picks if p["sector"] == "Finance"}
+    assert tech_picks == {"TECH0", "TECH1"}  # 2nd round takes the next-best, not TECH2
+    assert fin_picks == {"FIN0", "FIN1"}
+    assert len(picks) == 4
 
 
 # ---------------------------------------------------------------------------

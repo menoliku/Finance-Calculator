@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { authFetch, getToken } from "../auth";
 import InfoTip from "./InfoTip";
+import FinancialProfileGauge from "./FinancialProfileGauge";
+
+type FinancialHealthCheckProps = {
+  onNavigateToRecommendations: () => void;
+};
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -64,6 +69,13 @@ type HealthCheckResult = {
     benchmarkPercent: number;
     status: DimensionStatus;
   };
+  monthlySavingsRecommendation: {
+    totalMonthly: number;
+    towardInvesting: number;
+    towardCurrentPriority: number;
+    explanation: string;
+  };
+  readyToInvest: boolean;
   notes: string[];
   disclaimer: string;
 };
@@ -119,7 +131,9 @@ const STEPS: Step[] = [
   },
 ];
 
-export default function FinancialHealthCheck() {
+export default function FinancialHealthCheck({
+  onNavigateToRecommendations,
+}: FinancialHealthCheckProps) {
   const [isStarted, setIsStarted] = useState<boolean>(false);
   const [step, setStep] = useState<number>(0);
   const [answers, setAnswers] = useState<Answers>(INITIAL_ANSWERS);
@@ -235,6 +249,8 @@ export default function FinancialHealthCheck() {
           </p>
         </div>
 
+        <FinancialProfileGauge stage={result.stage} stageLabel={result.stageLabel} />
+
         <p className="note-callout">{result.recommendedFocus}</p>
 
         <div className="summary-grid">
@@ -286,6 +302,26 @@ export default function FinancialHealthCheck() {
           </div>
         </div>
 
+        <div>
+          <h3>
+            How Much To Save Each Month
+            <InfoTip text="Based on Fidelity's 50/15/5 guideline (income split between essentials, retirement, and short-term savings), adjusted for what you should prioritize right now." />
+          </h3>
+          <p>
+            <strong>{formatDollars(result.monthlySavingsRecommendation.totalMonthly)}/month</strong>
+            {result.readyToInvest ? (
+              <span className="helper-text">
+                {" "}
+                — {formatDollars(result.monthlySavingsRecommendation.towardInvesting)} toward investing,{" "}
+                the rest toward short-term savings
+              </span>
+            ) : (
+              <span className="helper-text"> — all of it toward your current priority above</span>
+            )}
+          </p>
+          <p className="helper-text">{result.monthlySavingsRecommendation.explanation}</p>
+        </div>
+
         {result.notes.length > 0 && (
           <div className="recommendation-notes">
             {result.notes.map((note, index) => (
@@ -297,6 +333,12 @@ export default function FinancialHealthCheck() {
         )}
 
         <p className="helper-text">{result.disclaimer}</p>
+
+        {result.readyToInvest && (
+          <button type="button" onClick={onNavigateToRecommendations}>
+            Get Personalized Investment Recommendations →
+          </button>
+        )}
 
         <button type="button" onClick={startOver}>
           Retake Check-up
